@@ -17,11 +17,18 @@
 
 package net.floodlightcontroller.routing;
 
+import java.io.Serializable;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
+
 import org.openflow.util.HexString;
 
-public class Link implements Comparable<Link> {
-    @JsonProperty("src-switch")
+public class Link implements Comparable<Link>, Serializable {
+    /**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	@JsonProperty("src-switch")
     private long src;
     @JsonProperty("src-port")
     private short srcPort;

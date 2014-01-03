@@ -1,12 +1,14 @@
 package net.floodlightcontroller.app.b4;
 
 import java.rmi.AlreadyBoundException;
+import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.openflow.protocol.OFMessage;
@@ -15,6 +17,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
+import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
+import net.floodlightcontroller.app.b4.rmi.RemoteLocalClient;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
@@ -24,6 +28,7 @@ import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
+import net.floodlightcontroller.routing.Link;
 
 public class GlobalController  implements IOFMessageListener, IFloodlightModule {
 
@@ -32,14 +37,67 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 
 	protected IFloodlightProviderService floodlightProvider;
 
+	ConcurrentHashMap<Integer, LocalHandler> allLocals;
+	
+	Thread worker;
+	
+	InformationBase informationBase;
+
+	class workerImpl implements Runnable {
+		@Override
+		public void run() {
+			logger.info("starting worker.............");
+			while(true) {
+				for(Integer id : allLocals.keySet()) {
+					LocalHandler handler = allLocals.get(id);
+					try {
+						Registry registry = LocateRegistry.getRegistry("localhost", 
+								handler.portToUse);
+						RemoteLocalClient client = (RemoteLocalClient) registry.lookup(handler.name);
+						logger.info(client.test());
+					} catch (RemoteException e) {
+						e.printStackTrace();
+					} catch (NotBoundException e) {
+						e.printStackTrace();
+					}		
+
+				}
+				try {
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
 	
 	@Override
 	public String getName() {
 		return GlobalController.class.getSimpleName();
 	}
+
+	public LocalHandler getNextHandler() {
+		LocalHandler lh = new LocalHandler();
+		int id = localid.getAndAdd(1);
+		int port = RemoteGlobalConstant.START_PORT + id;
+		String name = "local-" + id;
+		lh.id = id;
+		lh.portToUse = port;
+		lh.name = name;
+		allLocals.put(lh.id, lh);
+		return lh;
+	}
 	
-	public int getNextId() {
-		return localid.getAndAdd(1);
+	public boolean addHostSwitchMap(String mac, Long swid) {
+		return informationBase.addHostSwitchMap(mac, swid);
+	}
+	
+	public boolean addSwLink(Link link) {
+		return informationBase.addSwLink(link);
+	}
+	
+	public Long getSwitchByMac(String mac) {
+		return informationBase.getSwitchByMac(mac);
 	}
 
 	@Override
@@ -79,7 +137,9 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	public void init(FloodlightModuleContext context)
 			throws FloodlightModuleException {
 		// TODO Auto-generated method stub
+		allLocals = new ConcurrentHashMap<Integer, LocalHandler>();
 		localid = new AtomicInteger(0);
+		informationBase = new InformationBase();
 		logger = LoggerFactory.getLogger(LocalController.class);
 		floodlightProvider = context.getServiceImpl(IFloodlightProviderService.class);
 		try {
@@ -91,7 +151,9 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		} catch (AlreadyBoundException e) {
 			e.printStackTrace();
 		}
-		logger.info("---------global controller RMI registered");
+		worker = new Thread(new workerImpl());
+		worker.start();
+		//logger.info("---------global controller RMI registered");
 	}
 
 	@Override
