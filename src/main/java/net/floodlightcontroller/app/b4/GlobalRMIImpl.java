@@ -4,7 +4,6 @@ import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
-import net.floodlightcontroller.routing.Link;
 
 public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalServer {
 
@@ -30,13 +29,19 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	}
 	
 	@Override
-	public boolean addSwLink(Link link) throws RemoteException {
-		return controllerRef.addSwLink(link);
+	public boolean addSwLink(Long src, Long dst) throws RemoteException {
+		return controllerRef.addSwLink(src, dst);
 	}
 
 	@Override
 	public Long getSwitchByMac(String mac) throws RemoteException {
 		return controllerRef.getSwitchByMac(mac);
+	}
+
+	@Override
+	public boolean addPortSwitchMap(String mac, Long swid)
+			throws RemoteException {
+		return controllerRef.addPortSwitchMap(mac, swid);
 	}
 
 }

@@ -17,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
-import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
 import net.floodlightcontroller.app.b4.rmi.RemoteLocalClient;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
@@ -28,7 +27,6 @@ import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
-import net.floodlightcontroller.routing.Link;
 
 public class GlobalController  implements IOFMessageListener, IFloodlightModule {
 
@@ -38,6 +36,7 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	protected IFloodlightProviderService floodlightProvider;
 
 	ConcurrentHashMap<Integer, LocalHandler> allLocals;
+	ConcurrentHashMap<Integer, RemoteLocalClient> allLocalHandlers;
 	
 	Thread worker;
 	
@@ -49,12 +48,18 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 			logger.info("starting worker.............");
 			while(true) {
 				for(Integer id : allLocals.keySet()) {
-					LocalHandler handler = allLocals.get(id);
 					try {
-						Registry registry = LocateRegistry.getRegistry("localhost", 
-								handler.portToUse);
-						RemoteLocalClient client = (RemoteLocalClient) registry.lookup(handler.name);
-						logger.info(client.test());
+						if(!allLocalHandlers.containsKey(id)) {
+							LocalHandler handler = allLocals.get(id);
+							Registry registry = LocateRegistry.getRegistry("localhost", 
+									handler.portToUse);
+							RemoteLocalClient client = (RemoteLocalClient) registry.lookup(handler.name);
+							logger.info(client.test());
+							allLocalHandlers.put(id, client);
+						} else {
+							RemoteLocalClient client = allLocalHandlers.get(id);
+							logger.info(client.test());
+						}
 					} catch (RemoteException e) {
 						e.printStackTrace();
 					} catch (NotBoundException e) {
@@ -92,12 +97,16 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		return informationBase.addHostSwitchMap(mac, swid);
 	}
 	
-	public boolean addSwLink(Link link) {
-		return informationBase.addSwLink(link);
+	public boolean addSwLink(Long src, Long dst) {
+		return informationBase.addSwLink(src, dst);
 	}
 	
 	public Long getSwitchByMac(String mac) {
 		return informationBase.getSwitchByMac(mac);
+	}
+	
+	public boolean addPortSwitchMap(String mac, Long swid) {
+		return informationBase.addPortSwitchMap(mac, swid);
 	}
 
 	@Override
@@ -138,6 +147,7 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 			throws FloodlightModuleException {
 		// TODO Auto-generated method stub
 		allLocals = new ConcurrentHashMap<Integer, LocalHandler>();
+		allLocalHandlers = new ConcurrentHashMap<Integer, RemoteLocalClient>();
 		localid = new AtomicInteger(0);
 		informationBase = new InformationBase();
 		logger = LoggerFactory.getLogger(LocalController.class);

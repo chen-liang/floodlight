@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.openflow.protocol.OFMessage;
-import org.openflow.protocol.OFPacketIn;
 import org.openflow.protocol.OFType;
 
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
@@ -26,6 +25,7 @@ import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.core.IFloodlightProviderService;
+import net.floodlightcontroller.counter.ICounterStoreService;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 
 import java.util.ArrayList;
@@ -34,15 +34,14 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryListener;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
 import net.floodlightcontroller.packet.Ethernet;
-import net.floodlightcontroller.routing.ForwardingBase;
-import net.floodlightcontroller.routing.IRoutingDecision;
-import net.floodlightcontroller.routing.Link;
+import net.floodlightcontroller.routing.IRoutingService;
+import net.floodlightcontroller.topology.ITopologyService;
 
 import org.openflow.util.HexString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class LocalController extends ForwardingBase implements IOFMessageListener, IFloodlightModule, ILinkDiscoveryListener, IOFSwitchListener {
+public class LocalController implements IOFMessageListener, IFloodlightModule, ILinkDiscoveryListener, IOFSwitchListener {
 
 	protected IFloodlightProviderService floodlightProvider;
 	protected ILinkDiscoveryService linkDiscoverer;
@@ -103,12 +102,15 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 		l.add(IFloodlightProviderService.class);
 		l.add(ILinkDiscoveryService.class);
 		l.add(IDeviceService.class);
+        l.add(IRoutingService.class);
+        l.add(ITopologyService.class);
+        l.add(ICounterStoreService.class);
 		return l;
 	}
 
 	@Override
 	public void init(FloodlightModuleContext context)
-			throws FloodlightModuleException {    
+			throws FloodlightModuleException {   
 		floodlightProvider = context.getServiceImpl(IFloodlightProviderService.class);
 		floodlightProvider.addOFSwitchListener(this);
 		linkDiscoverer = context.getServiceImpl(ILinkDiscoveryService.class);
@@ -164,15 +166,19 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 						IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
 
 		Long sourceMACHash = Ethernet.toLong(eth.getSourceMACAddress());
-		Long destMACHash = Ethernet.toLong(eth.getDestinationMACAddress());
 		if (!macAddresses.contains(sourceMACHash)) {
 			macAddresses.add(sourceMACHash);
 			String macadd = HexString.toHexString(sourceMACHash);
 			//CAUTION!!! SEND THIS INFO TO GLOBAL IMMIDIATELY UPON SEEING IT, OTHERWISE CONFUSTION ON GLOBAL WILL HAPPEN!
 			//AND!!! EVEN THIS ASSUMES MININET HAS --MAC OPTION
+			String s = "";
+			for(ImmutablePort port : sw.getPorts()) {
+				s += port.getName() + " ";
+			}
 			logger.info("MAC Address: {} seen on switch: {}",
 					macadd,
 					sw.getId());
+			logger.info("the ports:" + s);
 			try {
 				server.addHostSwitchMap(macadd, sw.getId());
 			} catch (RemoteException e) {
@@ -180,18 +186,6 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 			}
 		}	
 		
-		String destMAC = HexString.toHexString(destMACHash);		
-		Long swid = null;
-		try {
-			swid = server.getSwitchByMac(destMAC);
-		} catch (RemoteException e) {
-			e.printStackTrace();
-		}
-		if(swid == null) {
-			logger.info("@@@@@@@@@@@@@@@dont know where is dest MAC:" + destMAC);
-		} else {
-			logger.info("@@@@@@@@@@@@@@@dest mac is on switch " + swid);
-		}
 		/*ConcurrentSkipListSet<Long> dpids = new ConcurrentSkipListSet<Long>(floodlightProvider.getAllSwitchDpids());
 		String alldpids = "";
 		for(Long dpid : dpids) {
@@ -211,11 +205,13 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 
 	@Override
 	public void linkDiscoveryUpdate(List<LDUpdate> updateList) {
-		logger.info("++++++++++----linkdiscoverupdate:" + updateList.get(0).getSrc() + ":" + updateList.get(0).getDst());
 		for(LDUpdate update : updateList) {
-			Link link = new Link(update.getSrc(), update.getSrcPort(), update.getDst(), update.getDstPort());
+			/*logger.info("++++++++++----linkdiscoverupdate:" + update.getSrc() 
+					+ "::" + update.getSrcPort() + ":" 
+					+ update.getDst() + "::" + update.getDstPort());
+			*/
 			try {
-				server.addSwLink(link);
+				server.addSwLink(update.getSrc(), update.getDst());
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
@@ -234,7 +230,21 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 
 	@Override
 	public void switchActivated(long switchId) {
-		logger.info("++++++++++switch actived:" + switchId);		
+		logger.info("++++++++++switch actived:" + switchId);	
+		IOFSwitch sw = floodlightProvider.getSwitch(switchId);
+		String s = "";
+		for(ImmutablePort port : sw.getPorts()) {
+			String addr = HexString.toHexString(port.getHardwareAddress());
+			s += port.getName() + ":" + addr + " ";
+			try {
+				logger.info("adding port-switch map====>addr:" + addr + " name:" + port.getName() + " is on " + sw.getId());
+				server.addPortSwitchMap(addr, sw.getId());
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+			
+		}
+		logger.info("............adds:" + s);	
 	}
 
 	@Override
@@ -246,14 +256,6 @@ public class LocalController extends ForwardingBase implements IOFMessageListene
 	@Override
 	public void switchChanged(long switchId) {
 		logger.info("++++++++++switch changed:" + switchId);
-	}
-
-	@Override
-	public net.floodlightcontroller.core.IListener.Command processPacketInMessage(
-			IOFSwitch sw, OFPacketIn pi, IRoutingDecision decision,
-			FloodlightContext cntx) {
-		// TODO Auto-generated method stub
-		return null;
 	}
 
 }
