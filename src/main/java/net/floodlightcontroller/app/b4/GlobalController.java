@@ -7,6 +7,7 @@ import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -97,8 +98,8 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		return informationBase.addHostSwitchMap(mac, swid);
 	}
 	
-	public boolean addSwLink(Long src, Long dst) {
-		return informationBase.addSwLink(src, dst);
+	public boolean addSwLink(Long src, Short srcPort, Long dst, Short dstPort) {
+		return informationBase.addSwLink(src, srcPort, dst, dstPort);
 	}
 	
 	public Long getSwitchByMac(String mac) {
@@ -107,6 +108,21 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	
 	public boolean addPortSwitchMap(String mac, Long swid) {
 		return informationBase.addPortSwitchMap(mac, swid);
+	}
+	
+	public void sendFlowDemand(HashMap<String, HashMap<String, Long>> map, int id)
+			throws RemoteException {
+		// TODO Auto-generated method stub
+		logger.info(">>>>>>>>>>>>>>>>>>>>Received FlowDemand!!!" + map.size() + " from " + id);
+		for(String srcMAC : map.keySet()) {
+			String s = "for " + srcMAC + "::";
+			HashMap<String, Long> destMap = map.get(srcMAC);
+			for(String dstMAC : destMap.keySet()) {
+				s += dstMAC + "-->" + destMap.get(dstMAC);
+			}
+			s += '\n';
+			logger.info(s);
+		}		
 	}
 
 	@Override
@@ -163,7 +179,7 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		}
 		worker = new Thread(new workerImpl());
 		worker.start();
-		//logger.info("---------global controller RMI registered");
+		logger.info("---------global controller RMI registered");
 	}
 
 	@Override

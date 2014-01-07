@@ -2,6 +2,7 @@ package net.floodlightcontroller.app.b4;
 
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.HashMap;
 
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
 
@@ -29,8 +30,8 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	}
 	
 	@Override
-	public boolean addSwLink(Long src, Long dst) throws RemoteException {
-		return controllerRef.addSwLink(src, dst);
+	public boolean addSwLink(Long src, Short srcPort, Long dst, Short dstPort) throws RemoteException {
+		return controllerRef.addSwLink(src, srcPort, dst, dstPort);
 	}
 
 	@Override
@@ -42,6 +43,12 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	public boolean addPortSwitchMap(String mac, Long swid)
 			throws RemoteException {
 		return controllerRef.addPortSwitchMap(mac, swid);
+	}
+
+	@Override
+	public void sendFlowDemand(HashMap<String, HashMap<String, Long>> map, int id)
+			throws RemoteException {
+		controllerRef.sendFlowDemand(map, id);
 	}
 
 }

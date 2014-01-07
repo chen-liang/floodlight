@@ -14,10 +14,26 @@ public class InformationBase {
 	ConcurrentHashMap<String, Long> hostSwitchMap; //key mac add, value swid
 	ConcurrentHashMap<String,Long> portSwitchMap;
 	
+	ConcurrentHashMap<Long, SwitchInfo> allSwitchInfo;
+	
+	class SwitchInfo {
+		long dpid;
+		ConcurrentHashMap<Short, Long> peers; //key port id, value peer swid
+		
+		public SwitchInfo() {
+			peers = new ConcurrentHashMap<Short, Long>();
+		}
+		
+		public void addLink(Short localport, Long remoteId) {
+			peers.put(localport, remoteId);
+		}
+	}
+	
 	public InformationBase() {
 		logger = LoggerFactory.getLogger(InformationBase.class);
 		allSwitches = new CopyOnWriteArrayList<Long>();
 		allSwLinks = new ConcurrentHashMap<Long, CopyOnWriteArrayList<Long>>();
+		allSwitchInfo = new ConcurrentHashMap<Long, SwitchInfo>();
 		hostSwitchMap = new ConcurrentHashMap<String, Long>();
 		portSwitchMap = new ConcurrentHashMap<String, Long>();
 	}
@@ -28,13 +44,34 @@ public class InformationBase {
 		return true; //might want to return false later
 	}
 	
-	public boolean addSwLink(Long src, Long dst) {	
+	public boolean addSwLink(Long src, Short srcPort, Long dst, Short dstPort) {	
+		
+		SwitchInfo srcswinfo;
+		SwitchInfo dstswinfo;
+		if(allSwitchInfo.contains(src)) {
+			srcswinfo = allSwitchInfo.get(src);			
+		} else {
+			srcswinfo = new SwitchInfo();
+		}
+		srcswinfo.addLink(srcPort, dst);
+		allSwitchInfo.put(src, srcswinfo);
+		logger.info("adding link from:" + src + "on port " + srcPort + " to " + dst);
+		
+		if(allSwitchInfo.contains(dst)) {
+			dstswinfo = allSwitchInfo.get(dst);
+		} else {
+			dstswinfo = new SwitchInfo();
+		}
+		dstswinfo.addLink(dstPort, src);
+		allSwitchInfo.put(dst, dstswinfo);
+		logger.info("adding link from:" + dst + "on port " + dstPort + " to " + src);
+		/*
 		CopyOnWriteArrayList<Long> peers;
 		CopyOnWriteArrayList<Long> peersInverted;
 		if(allSwLinks.containsKey(src)) {
 			peers = allSwLinks.get(src);
 			if(peers.contains(src)) {
-				logger.info("adding link from:" + src + " to " + dst);
+				//logger.info("adding link from:" + src + " to " + dst);
 				peers.add(dst);
 			} 
 		} else {
@@ -46,7 +83,7 @@ public class InformationBase {
 		if(allSwLinks.containsKey(dst)) {
 			peersInverted = allSwLinks.get(dst);
 			if(peersInverted.contains(dst)) {
-				logger.info("adding link from:" + dst + " to " + src);
+				//logger.info("adding link from:" + dst + " to " + src);
 				peersInverted.add(src);
 			}
 		} else {
@@ -58,7 +95,7 @@ public class InformationBase {
 		for(Long key : allSwLinks.keySet()) {
 			s += key + "->" + allSwLinks.get(key).size() + " ";
 		}
-		logger.info("now we have:" + s);
+		logger.info("now we have:" + s);*/
 		return true;
 	}
 	
