@@ -40,9 +40,9 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	}
 
 	@Override
-	public boolean addPortSwitchMap(String mac, Long swid)
+	public boolean addPortSwitchMap(String mac, Long swid, int id)
 			throws RemoteException {
-		return controllerRef.addPortSwitchMap(mac, swid);
+		return controllerRef.addPortSwitchMap(mac, swid, id);
 	}
 
 	@Override

@@ -28,8 +28,9 @@ import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
+import net.floodlightcontroller.restserver.IRestApiService;
 
-public class GlobalController  implements IOFMessageListener, IFloodlightModule {
+public class GlobalController  implements IOFMessageListener, IFloodlightModule, IFGTGConfigService {
 
 	protected static Logger logger;
 	protected AtomicInteger localid;
@@ -42,6 +43,10 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	Thread worker;
 	
 	InformationBase informationBase;
+	
+	protected IRestApiService restApi;
+	
+	protected String configFilePath;
 
 	class workerImpl implements Runnable {
 		@Override
@@ -106,7 +111,8 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		return informationBase.getSwitchByMac(mac);
 	}
 	
-	public boolean addPortSwitchMap(String mac, Long swid) {
+	public boolean addPortSwitchMap(String mac, Long swid, int id) {
+		informationBase.addControllerSwMap(swid, id);
 		return informationBase.addPortSwitchMap(mac, swid);
 	}
 	
@@ -140,13 +146,17 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	@Override
 	public Collection<Class<? extends IFloodlightService>> getModuleServices() {
 		// TODO Auto-generated method stub
-		return null;
+		Collection<Class<? extends IFloodlightService>> l = new ArrayList<Class<? extends IFloodlightService>>();
+	    l.add(IFGTGConfigService.class);
+		return l;
 	}
 
 	@Override
 	public Map<Class<? extends IFloodlightService>, IFloodlightService> getServiceImpls() {
 		// TODO Auto-generated method stub
-		return null;
+		Map<Class<? extends IFloodlightService>, IFloodlightService> m = new HashMap<Class<? extends IFloodlightService>, IFloodlightService>();
+	    m.put(IFGTGConfigService.class, this);
+		return m;
 	}
 
 	@Override
@@ -155,6 +165,8 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 				new ArrayList<Class<? extends IFloodlightService>>();
 		l.add(IFloodlightProviderService.class);
 		l.add(ILinkDiscoveryService.class);
+		l.add(IFGTGConfigService.class);
+		l.add(IRestApiService.class);
 		return l;
 	}
 
@@ -167,6 +179,8 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 		localid = new AtomicInteger(0);
 		informationBase = new InformationBase();
 		logger = LoggerFactory.getLogger(LocalController.class);
+
+		restApi = context.getServiceImpl(IRestApiService.class);
 		floodlightProvider = context.getServiceImpl(IFloodlightProviderService.class);
 		try {
 			GlobalRMIImpl impl = new GlobalRMIImpl(this);
@@ -185,8 +199,7 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 	@Override
 	public void startUp(FloodlightModuleContext context)
 			throws FloodlightModuleException {
-		// TODO Auto-generated method stub
-		
+		restApi.addRestletRoutable(new FGTGApiRegisterHelper());
 	}
 
 	@Override
@@ -194,6 +207,14 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule 
 			IOFSwitch sw, OFMessage msg, FloodlightContext cntx) {
 		// TODO Auto-generated method stub
 		return null;
+	}
+
+	@Override
+	public void setConfigFile(String filepath) {
+		//every time config is reset, we recompute the whole thing, this is where all things start!
+		configFilePath = filepath;
+		logger.debug("===============>>>>>>>>>>>>>>>>>>>>>>>>configfile set to:" + configFilePath);
+		informationBase.readConfigFromFile(filepath);
 	}
 
 }

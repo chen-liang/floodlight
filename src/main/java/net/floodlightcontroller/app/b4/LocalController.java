@@ -404,7 +404,7 @@ IOFSwitchListener {
 			s += port.getName() + ":" + addr + " ";
 			try {
 				logger.info("adding port-switch map====>addr:" + addr + " name:" + port.getName() + " is on " + sw.getId());
-				server.addPortSwitchMap(addr, sw.getId());
+				server.addPortSwitchMap(addr, sw.getId(), handler.id);
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
