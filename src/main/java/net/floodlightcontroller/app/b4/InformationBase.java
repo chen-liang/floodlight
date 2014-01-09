@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -30,6 +31,9 @@ public class InformationBase {
 	
 	ConcurrentHashMap<String, FlowGroup> allFGs; //key is name, only for debugging purpose
 	ConcurrentHashMap<String, TunnelGroup> allTGs;
+	ConcurrentHashMap<String, Tunnel> allTs;
+	
+	ConcurrentHashMap<String, Long> allFGBW; //key is name, value is the BW we give it
 	
 	class SwitchInfo {
 		long dpid;
@@ -58,6 +62,8 @@ public class InformationBase {
 		//here id is to differentiate FGs that have the same src and dst
 		//equal to the QoS field in B4 paper
 		String id; 
+		
+		Long demand;
 	}
 	
 	class TunnelGroup {
@@ -65,24 +71,36 @@ public class InformationBase {
 		Long dstSwid;
 		String id; // maybe only for debugging purpose 
 		
-		CopyOnWriteArrayList<Tunnel> allTunnels;
-		CopyOnWriteArrayList<FlowGroup> currentFGs;
+		Long capacity;
+		
+		CopyOnWriteArrayList<String> allTunnels;
+		CopyOnWriteArrayList<String> currentFGs;
 		
 		public TunnelGroup() {
-			allTunnels = new CopyOnWriteArrayList<Tunnel>();
-			currentFGs = new CopyOnWriteArrayList<FlowGroup>();
+			allTunnels = new CopyOnWriteArrayList<String>();
+			currentFGs = new CopyOnWriteArrayList<String>();
 		}
 	}
 	
 	class Tunnel {
 		//should be a path, how to represent?
 		LinkedList<Long> path;
+		String id;
 
 		Long srcSwid;
 		Long dstSwid;
 		
 		public Tunnel() {
 			path = new LinkedList<Long>();
+		}
+		
+		@Override
+		public String toString() {
+			String s = "src:" + srcSwid + "->" + dstSwid;
+			for(Long swid : path) {
+				s += "::" + swid;
+			}
+			return s;
 		}
 	}
 	
@@ -91,7 +109,7 @@ public class InformationBase {
 			for(TunnelGroup tg : allTGs.values()) {
 				if(tg.srcSwid == fg.srcSwid && tg.dstSwid == fg.dstSwid) {
 					logger.info("adding a fg to tg, where src is " + fg.srcSwid + " dst is " + fg.dstSwid);
-					tg.currentFGs.add(fg);
+					tg.currentFGs.add(fg.id);
 				}
 			}
 		}
@@ -107,6 +125,8 @@ public class InformationBase {
 		localControllerSwMap = new ConcurrentHashMap<Integer, CopyOnWriteArrayList<Long>>();
 		allFGs = new ConcurrentHashMap<String, FlowGroup>();
 		allTGs = new ConcurrentHashMap<String, TunnelGroup>();
+		allTs = new ConcurrentHashMap<String, Tunnel>();
+		allFGBW = new ConcurrentHashMap<String, Long>();
 	}
 	
 	public boolean addHostSwitchMap(String mac, Long swid) {
@@ -195,12 +215,57 @@ public class InformationBase {
 		return true;
 	}
 	
-	protected void addFG(String name, FlowGroup fg) {
-		allFGs.put(name, fg);
-	}
 	
-	protected void addTG(String name, TunnelGroup tg) {
-		allTGs.put(name, tg);
+	public void computeFGBW() {
+		for(TunnelGroup tg : allTGs.values()) {
+			logger.debug("tgfg compution start:" + tg.id + ":" + tg.currentFGs.size());
+			
+			long avaliableBW = tg.capacity;
+			int fgNeedBW = tg.currentFGs.size();
+			ConcurrentHashMap<String, Long> currFgDemand = 
+					new ConcurrentHashMap<String, Long>();
+			
+			for(FlowGroup fg : allFGs.values()) {
+				currFgDemand.put(fg.id, fg.demand);
+			}
+			
+			boolean bwDepleted = true;
+			do {
+				long aveBw = avaliableBW/fgNeedBW;
+				avaliableBW = avaliableBW - (aveBw*fgNeedBW);//0 ideally
+				//at this point, assume bw is all allocated to fgs, 
+				//then to see how many of them get more than needed
+				// and take this part back as available 
+				for(String fgid : tg.currentFGs) {
+					FlowGroup fg = allFGs.get(fgid);
+					if(!currFgDemand.containsKey(fg.id))
+						continue;
+					if(currFgDemand.get(fg.id) <= aveBw) {
+						//demand is met
+						fgNeedBW --;
+						avaliableBW += (aveBw - fg.demand);
+						allFGBW.put(fg.id, fg.demand);
+						currFgDemand.remove(fg.id);
+						bwDepleted = false;
+					} else {
+						long olddmd = currFgDemand.get(fg.id);
+						currFgDemand.put(fg.id, (olddmd - aveBw));
+					}
+				}
+				//at this point bwDepleted remains true means aveBw is still
+				//the remainder of the devision
+			} while(bwDepleted == false && fgNeedBW > 0);
+			
+			if(fgNeedBW > 0) {
+				//some fg still can not be satisfied
+				for(String key : currFgDemand.keySet()) {
+					long grantedBw = allFGs.get(key).demand - currFgDemand.get(key);
+					allFGBW.put(key, grantedBw);
+				}
+			}
+			
+			logger.debug("tgfg compution finished:" + tg.id + ":" + tg.currentFGs.size());
+		}
 	}
 	
 	public boolean readConfigFromFile(String filepath) {
@@ -226,12 +291,17 @@ public class InformationBase {
 						fg.id = fgkey;
 						fg.srcSwid = Long.parseLong(fgdata.get("src").toString());
 						fg.dstSwid = Long.parseLong(fgdata.get("dst").toString());
-						allFGs.put(fgkey, fg);
+						fg.demand = Long.parseLong(fgdata.get("dmd").toString());
 						//logger.debug("]]]]]" + fgkey + "]]]]" + fgdata.get("src") + "-->" + fgdata.get("dst"));
-						logger.debug("adding new fg:" + fg.id + " src:" + fg.srcSwid + " dst:" + fg.dstSwid);
+						logger.debug("adding new fg:" + fg.id 
+								+ " src:" + fg.srcSwid 
+								+ " dst:" + fg.dstSwid 
+								+ " with dmd:" + fg.demand);
+						allFGs.put(fgkey, fg);
 					}
 					continue;
 				}
+				
 				if(key.equals("tg")) {
 					Iterator<Map.Entry<String, JsonNode>> tgfields = data.fields();
 					while(tgfields.hasNext()) {
@@ -242,8 +312,46 @@ public class InformationBase {
 						tg.id = tgkey;
 						tg.dstSwid = Long.parseLong(tgdata.get("dst").toString());
 						tg.srcSwid = Long.parseLong(tgdata.get("src").toString());
+						tg.capacity = Long.parseLong(tgdata.get("cap").toString());
+						JsonNode array = tgdata.get("ts");
+						LinkedList<String> list = 
+								mapper.readValue(array.traverse(), new TypeReference<LinkedList<String>>(){});
+						
+						String allids = "";
+						for(String id : list) {
+							tg.allTunnels.add(id);
+							allids += "->" + id;
+						}						
 						//logger.debug("]]]]]" + tgkey + "]]]]" + tgdata.get("src") + "-->" + tgdata.get("dst"));
-						logger.debug("adding new tg:" + tg.id + " src:" + tg.srcSwid + " dst:" + tg.dstSwid);
+						logger.debug("adding new tg:" + tg.id 
+								+ " src:" + tg.srcSwid 
+								+ " dst:" + tg.dstSwid
+								+ " cap:" + tg.capacity
+								+ " tunnels:" + allids);
+						allTGs.put(tgkey, tg);
+					}
+					continue;
+				}
+				
+				if(key.equals("allts")) {
+					Iterator<Map.Entry<String, JsonNode>> allts = data.fields();
+					while(allts.hasNext()) {
+						Tunnel tunnel = new Tunnel();
+						Map.Entry<String, JsonNode> tunnelJson = allts.next();
+						String tunnelid = tunnelJson.getKey();
+						JsonNode tunneldata = tunnelJson.getValue();
+						//logger.debug(tunnelid + "-->" + tunneldata);
+						LinkedList<String> list = 
+								mapper.readValue(tunneldata.traverse(), new TypeReference<LinkedList<String>>(){});
+						
+						for(String l : list) {
+							tunnel.path.add(Long.parseLong(l));
+						}
+						tunnel.id = tunnelid;
+						tunnel.srcSwid = Long.parseLong(list.getFirst());
+						tunnel.dstSwid = Long.parseLong(list.getLast());
+						logger.info("created new tunnel:" + tunnel);
+						allTs.put(tunnelid, tunnel);
 					}
 					continue;
 				}
