@@ -284,6 +284,18 @@ public class InformationBase {
 		}
 	}
 	
+	private void addAllFGsToTuneel(HashMap<String, String> preference, HashMap<String, Long> bwmap) {
+		for(String fgid : bwmap.keySet()) {
+			if(!preference.containsKey(fgid)) {
+				logger.debug("NOTE allocated bw but no tunnel???" + fgid);
+				continue;
+			}
+			String tid = preference.get(fgid);
+			Long bw = bwmap.get(fgid);
+			addFGtoTunnel(fgid, tid, bw);
+		}
+	}
+	
 	private HashMap<String, String> 
 	invertPreferenceMap(HashMap<String, LinkedList<String>> preference) {
 		HashMap<String, String> invertedMap = new HashMap<String, String>();
@@ -308,6 +320,10 @@ public class InformationBase {
 			Long bw = fgBwMap.get(fgid);
 			Tunnel tunnel = allTs.get(tid);
 			LinkedList<Long> path = tunnel.path;
+			if(path.size() <= 1) {
+				logger.debug("NOTE a length 1 path!!! What's this???");
+				continue;
+			}
 			for(int i = 0;i<path.size() - 1;i++) {
 				Long id1 = path.get(i);
 				Long id2 = path.get(i+1);
@@ -357,9 +373,9 @@ public class InformationBase {
 	}
 	
 	class PreferenceHelper {
-		Long lowerid;
-		Long higherid;
-		LinkedList<String> preference;
+		public Long lowerid;
+		public Long higherid;
+		public LinkedList<String> preference;
 		
 		PreferenceHelper(Long id1, Long id2, LinkedList<String> preference) {
 			this.lowerid = id1 > id2?id2 : id1;
@@ -399,91 +415,122 @@ public class InformationBase {
 		}
 		
 		while(currAvaTunnel.size() > 0 && currFGsNeedBW.size() > 0) {
+			//compute fg's preferred tunnel
 			HashMap<String, LinkedList<String>> preference =
 					computeFGpreference(currAvaTunnel, currFGsNeedBW);
-			
+			//according to tunnel preference, transform it to preference on link
 			HashMap<Long, HashMap<Long, LinkedList<String>>> linkPreference = 
 					createLinkPeference(preference);
-			
+			//compute the order we process the link, the one with greatest load
+			//comes first
 			LinkedList<PreferenceHelper> prflist = sort(linkPreference);
 			String s = "";
 			for(PreferenceHelper helper : prflist) {
 				s += "(" + helper.lowerid + "->" + helper.higherid + ")";
 			}
 			logger.debug(s);
-			
+			//now for each link, compute fair-share and allocate bw accordingly
 			for(int i = 0;i<prflist.size();i++) {
-				
+
+				HashMap<String, String> preferenceMap = invertPreferenceMap(preference);
 				Long lowerid = prflist.get(i).lowerid;
 				Long higherid = prflist.get(i).higherid;
-					//go through each link
-					//for a link, look at all the fgs that go through this link
-					//compute the bw for each of them
-					HashMap<String, Long> allocMap = 
-							computeLinkBWallocation(lowerid, higherid, linkPreference.get(lowerid).get(higherid));
-					////////////////////////////
-					logger.debug("for (" + lowerid + "->" + higherid + ")");					
-					for(String key : allocMap.keySet()) {
-						logger.debug("alloc:" + key + " bw:" + allocMap.get(key));
-					}
-					
-					LinkedList<String> fullTunnels = 
-							updateLinkCapByFG(invertPreferenceMap(preference), allocMap);
-					for(String fullTunnel : fullTunnels) {
-						if(!currAvaTunnel.contains(fullTunnel)) {
-							logger.debug("NOTE: removing non-exist tunnel:" + fullTunnel);
-							continue;
-						}							
-						currAvaTunnel.remove(fullTunnel);
-						logger.debug("remove full tunnel " + fullTunnel + " now have " + currAvaTunnel);
-					}
-					//I think this safe, because preference is sorted on demand,
-					//it could happen that some links are congested making other
-					//links on the same tunnel useless. In this case, no need to
-					//allocate bw
-					if(currAvaTunnel.size() == 0) {
-						logger.debug("NO MORE TUNNEL AVALIABLE, BREAK==>");
-						break;
-					}
-					/*if(fullLinks.containsKey(lowerid) && 
-							fullLinks.get(lowerid).contains(higherid)) {
-						//this link is full!!
-						if(!linkToTunnelMap.containsKey(lowerid)) {
-							logger.debug("NOTE!!!!!!!link not recognized lowerid:" + lowerid);
-						} else if (!linkToTunnelMap.get(lowerid).containsKey(higherid)){
-							logger.debug("NOTE!!!!!!!" + lowerid + "link not recognized" + higherid);
-						}
-						LinkedList<String> tids = linkToTunnelMap.get(lowerid).get(higherid);
+				//go through each link
+				//for a link, look at all the fgs that go through this link
+				//compute the bw for each of them
+				HashMap<String, Long> allocMap = 
+						computeLinkBWallocation(lowerid, higherid, prflist.get(i).preference);
+				////////////////////////////
+				logger.debug("for (" + lowerid + "->" + higherid + ")");					
+				for(String key : allocMap.keySet()) {
+					logger.debug("alloc:" + key + " bw:" + allocMap.get(key));
+				}
+				//based on the bw allocation, we can compute at this point
+				//which links are full, and thus compute the tunnels that
+				//are full
+				/* used to be
+				 * LinkedList<String> tids = linkToTunnelMap.get(lowerid).get(higherid);
 						for(String tid : tids) {
 							//remove all tunnels that use this link
 							currAvaTunnel.remove(tid);
 						}
-					}*/
-					for(String fgid : tunnelgroup.currentFGs) {
-						if(getFGCurrDemand(fgid) == 0) {
-							//------------demand met
-							currFGsNeedBW.remove(fgid);
-							if(currFGsNeedBW.size() == 0) {
-								break;
+				 * not sufficient, because a link full means some other links are also
+				 * full as long as this link is not the only link in all tunnel!!
+				 */
+				LinkedList<String> fullTunnels = 
+						updateLinkCapByFG(preferenceMap, allocMap);
+				////////////////
+				addAllFGsToTuneel(preferenceMap, allocMap);
+				///////////////
+				for(String fullTunnel : fullTunnels) {
+					if(!currAvaTunnel.contains(fullTunnel)) {
+						logger.debug("NOTE: removing non-exist tunnel:" + fullTunnel);
+						continue;
+					}
+					//remove the full tunnels from avaliable tunnels
+					currAvaTunnel.remove(fullTunnel);
+					logger.debug("remove full tunnel " + fullTunnel + " now have " + currAvaTunnel);
+					//ALSO MAKE ALL LINKS OF THIS TUNNEL FROM LINK UNAVALIABLE
+					LinkedList<String> failFGs = preference.get(fullTunnel);
+					if(failFGs == null || failFGs.size() == 0) {
+						logger.debug("NOTE no body prefer this tunnel but it's full???" + fullTunnel);
+					} else {
+						for(String failFgid : failFGs) {
+							for(PreferenceHelper phelper : prflist) {
+								if(phelper.preference.contains(failFgid)) {
+									phelper.preference.remove(failFgid);
+									logger.debug("Allocation will fail, remove " + failFgid + " from (" 
+									+ phelper.lowerid + "," + phelper.higherid + ")");
+								}
 							}
 						}
 					}
-				
+				}
+				//after removal, check whether there are avaliable tunnels
+				//if not, stop
+				//I think this safe, because preference is sorted on demand,
+				//it could happen that some links are congested making other
+				//links on the same tunnel useless. In this case, no need to
+				//allocate bw, on these other tunnels
+				if(currAvaTunnel.size() == 0) {
+					logger.debug("NO MORE TUNNEL AVALIABLE, BREAK==>");
+					break;
+				}
+
+				for(String fgid : tunnelgroup.currentFGs) {
+					if(getFGCurrDemand(fgid) == 0) {
+						//------------demand met
+						currFGsNeedBW.remove(fgid);
+						if(currFGsNeedBW.size() == 0) {
+							break;
+						}
+					}
+				}
+			}
+			logger.debug("After one iteration---------------------------------->");
+			logger.debug("Full links:");
+			for(Long lowerid : fullLinks.keySet()) {
+				CopyOnWriteArrayList<Long> dstid = fullLinks.get(lowerid);
+				logger.debug("(" + lowerid + "," + dstid + ")");
+			}
+			logger.debug("FG allocations:");
+			for(String fgid : FgToTunnelMap.keySet()) {
+				ConcurrentHashMap<String, Long> alloc = FgToTunnelMap.get(fgid);
+				String ss = "For fg " + fgid + ":";
+				for(String tid : alloc.keySet()) {
+					ss += tid + "->" + alloc.get(tid) + " ";
+				}
+				logger.debug(ss);
 			}
 		}		
 		logger.debug("FG bw allocation finished!!");
 		for(String fgid : allFGBW.keySet()) {
 			logger.debug(fgid + "->" + allFGBW.get(fgid));
 		}
-		logger.debug("Full links:");
-		for(Long lowerid : fullLinks.keySet()) {
-			CopyOnWriteArrayList<Long> dstid = fullLinks.get(lowerid);
-			logger.debug("(" + lowerid + "," + dstid + ")");
-		}
+
 	}
 	
-	private HashMap<Long, HashMap<Long, LinkedList<String>>>
-	createLinkPeference(
+	private HashMap<Long, HashMap<Long, LinkedList<String>>> createLinkPeference(
 			HashMap<String, LinkedList<String>> tunnelPreference) {
 		
 		HashMap<Long, HashMap<Long, LinkedList<String>>> linkPreference = 
@@ -494,27 +541,36 @@ public class InformationBase {
 			
 			for(Long higherid : linkdstMap.keySet()) {
 				LinkedList<String> tunnellist = linkToTunnelMap.get(lowerid).get(higherid);
-				
+				/*
+				 * go through all the tunnels that use this link
+				 */
 				for(String tunnelid : tunnellist) {
 					if(!tunnelPreference.containsKey(tunnelid)) //no fg interested in this tunnel, skip it
 						continue;
+					/*
+					 * then add all the fgs that use this tunnel to link pref
+					 */
 					LinkedList<String> fgPreferThisTunnel = tunnelPreference.get(tunnelid);
 					if(linkPreference.containsKey(lowerid)) {
 						if(linkPreference.get(lowerid).containsKey(higherid)) {
+							//if there already exists entries that prefer this link
 							LinkedList<String> previousFGs = linkPreference.get(lowerid).get(higherid);
 							for(String s : fgPreferThisTunnel) {
-								logger.debug("adding " + s + " to " + lowerid + "->" + higherid);
 								previousFGs.add(s);
+								logger.debug("adding " + s + " to " + lowerid + "->" + higherid + " now " + previousFGs);
 							}
 							linkPreference.get(lowerid).put(higherid, previousFGs);
 						} else {
 							LinkedList<String> newFGs = new LinkedList<String>();
 							for(String s : fgPreferThisTunnel) {
 								newFGs.add(s);
+								logger.debug("adding2 " + s + " to " + lowerid + "->" + higherid + " now " + newFGs);
 							}
+							
 							linkPreference.get(lowerid).put(higherid, newFGs);
 						}
 					} else {
+						//create entry
 						HashMap<Long,LinkedList<String>> newmap = new HashMap<Long, LinkedList<String>>();
 						LinkedList<String> newFGs = new LinkedList<String>();
 						for(String s : fgPreferThisTunnel) {
@@ -526,6 +582,7 @@ public class InformationBase {
 				}
 			}
 		}
+		
 		for(Long lowerid : linkPreference.keySet()) {
 			for(Long higherid : linkPreference.get(lowerid).keySet()) {
 				String s = "<><><>><><><><" + lowerid + "><><>" + higherid + " "
@@ -613,7 +670,9 @@ public class InformationBase {
 			//only happens when all in currFgDemand have demand 0
 			return FGBWonLink;//a empty map
 		}
-		avaliableBW = getLinkCapacity(id1, id2);		
+		avaliableBW = getLinkCapacity(id1, id2);
+
+		logger.debug("STARTING ALLOC ON:" + id1 + "," + id2 + " WITH AVABW" + avaliableBW);
 		boolean bwDepleted = true;
 		do {
 			bwDepleted = true;
@@ -660,11 +719,12 @@ public class InformationBase {
 			//the remainder of the devision
 		} while(bwDepleted == false && fgNeedBW > 0);
 		
-		/*if(fgNeedBW > 0) {
+		//should we remove this ????
+		if(fgNeedBW > 0) {
 			logger.debug("making this link full:(" + id1
 					+ "->" + id2 + ")");
 			markLinkFull(id1, id2);
-		}*/
+		}
 		return FGBWonLink;
 	}
 
