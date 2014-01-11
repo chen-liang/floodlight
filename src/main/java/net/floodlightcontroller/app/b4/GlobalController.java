@@ -17,6 +17,7 @@ import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteLocalClient;
 import net.floodlightcontroller.core.FloodlightContext;
@@ -116,18 +117,16 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		return informationBase.addPortSwitchMap(mac, swid);
 	}
 	
-	public void sendFlowDemand(HashMap<String, HashMap<String, Long>> map, int id)
+	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id)
 			throws RemoteException {
 		// TODO Auto-generated method stub
 		logger.info(">>>>>>>>>>>>>>>>>>>>Received FlowDemand!!!" + map.size() + " from " + id);
 		for(String srcMAC : map.keySet()) {
-			String s = "for " + srcMAC + "::";
-			HashMap<String, Long> destMap = map.get(srcMAC);
+			HashMap<String, FlowStatsDesc> destMap = map.get(srcMAC);
 			for(String dstMAC : destMap.keySet()) {
-				s += dstMAC + "-->" + destMap.get(dstMAC);
+				FlowStatsDesc desc = destMap.get(dstMAC); 
+				this.informationBase.addByteCount(desc.getMatch(), desc.getCount());
 			}
-			s += '\n';
-			logger.info(s);
 		}		
 	}
 

@@ -18,6 +18,6 @@ public interface RemoteGlobalServer extends Remote {
 	
 	public boolean addPortSwitchMap(String mac, Long swid, int id) throws RemoteException;
 	
-	public void sendFlowDemand(HashMap<String, HashMap<String, Long>> map, int id) throws RemoteException;
+	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id) throws RemoteException;
 	
 }

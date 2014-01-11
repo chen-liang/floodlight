@@ -4,6 +4,7 @@ import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.HashMap;
 
+import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
 
 public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalServer {
@@ -46,7 +47,7 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	}
 
 	@Override
-	public void sendFlowDemand(HashMap<String, HashMap<String, Long>> map, int id)
+	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id)
 			throws RemoteException {
 		controllerRef.sendFlowDemand(map, id);
 	}

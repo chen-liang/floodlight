@@ -29,6 +29,7 @@ import org.openflow.protocol.statistics.OFFlowStatisticsRequest;
 import org.openflow.protocol.statistics.OFStatistics;
 import org.openflow.protocol.statistics.OFStatisticsType;
 
+import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
 import net.floodlightcontroller.core.FloodlightContext;
@@ -95,7 +96,7 @@ IOFSwitchListener {
 	// Stores the learned state for each switch
 	protected Map<IOFSwitch, Map<MacVlanPair,Short>> macVlanToSwitchPortMap;
     // more flow-mod defaults
-    protected static short FLOWMOD_DEFAULT_IDLE_TIMEOUT = 5; // in seconds
+    protected static short FLOWMOD_DEFAULT_IDLE_TIMEOUT = 300; // in seconds
     protected static short FLOWMOD_DEFAULT_HARD_TIMEOUT = 0; // infinite
     protected static short FLOWMOD_PRIORITY = 100;
     // for managing our map sizes
@@ -104,12 +105,12 @@ IOFSwitchListener {
     protected static final boolean LEARNING_SWITCH_REVERSE_FLOW = true;
 	/////////////////////////////////////////
     
-    protected HashMap<String, HashMap<String,Long>> computeFlowDemand(LinkedList<OFStatistics> values) {
+    protected HashMap<String, HashMap<String,FlowStatsDesc>> computeFlowDemand(LinkedList<OFStatistics> values) {
     	if(values.size() == 0) 
     		return null;
     	
     	//whether makes this a member variable? by doing so we can record all histories, but do we want to do that?
-    	HashMap<String, HashMap<String,Long>> map = new HashMap<String, HashMap<String,Long>>();
+    	HashMap<String, HashMap<String,FlowStatsDesc>> map = new HashMap<String, HashMap<String,FlowStatsDesc>>();
     	for(OFStatistics value : values) {
     		if(!(value instanceof OFFlowStatisticsReply)) {
     			logger.info("+++++++++++++++=====NOTE:unexcepted states Type!!!" + value.getClass().getCanonicalName());
@@ -121,13 +122,15 @@ IOFSwitchListener {
     		//Long destMac = Ethernet.toLong(match.getDataLayerDestination());
     		String sourceMac = HexString.toHexString(match.getDataLayerSource());
     		String destMac = HexString.toHexString(match.getDataLayerDestination());
-    		HashMap<String, Long> destMap;
+    		HashMap<String, FlowStatsDesc> destMap;
     		if(map.containsKey(sourceMac)) {
     			destMap = map.get(sourceMac);
     		} else {
-    			destMap = new HashMap<String, Long>();
+    			destMap = new HashMap<String, FlowStatsDesc>();
     		}
-    		destMap.put(destMac, fstats.getByteCount());
+    		FlowStatsDesc desc = new FlowStatsDesc(fstats.getByteCount(), match);
+    		
+    		destMap.put(destMac, desc);
     		logger.info("--------^^^^^^^^^^^adding flow count:" + sourceMac + "->" + destMac + ":" + fstats.getByteCount());
     		map.put(sourceMac, destMap);
     	}    	
@@ -139,7 +142,7 @@ IOFSwitchListener {
 		public void run() {
 			while(true) {
 				//one job is to send out states request periodically
-				logger.info("**********************querying for stats!!!" + swLocalCache.size());
+				//logger.info("**********************querying for stats!!!" + swLocalCache.size());
 				for(Long swid : swLocalCache) {
 					IOFSwitch sw = floodlightProvider.getSwitch(swid);
 					LinkedList<OFStatistics> values = new LinkedList<OFStatistics>(getStats(sw));
@@ -151,14 +154,14 @@ IOFSwitchListener {
 							OFFlowStatisticsReply flowstat = (OFFlowStatisticsReply)stat;							
 							s += "->" + flowstat.getByteCount() + "+++";
 						}
-						logger.info(s);
+//						/logger.info(s);
 						try {
 							server.sendFlowDemand(computeFlowDemand(values), handler.id);
 						} catch (RemoteException e) {
 							e.printStackTrace();
 						}
 					} else {
-						logger.info("***************************" + swid);
+						//logger.info("***************************" + swid);
 					}
 				}
 				try {
@@ -325,6 +328,7 @@ IOFSwitchListener {
 						IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
 
 		Long sourceMACHash = Ethernet.toLong(eth.getSourceMACAddress());
+		
 		if (!macAddresses.contains(sourceMACHash)) {
 			macAddresses.add(sourceMACHash);
 			String macadd = HexString.toHexString(sourceMACHash);
@@ -334,26 +338,15 @@ IOFSwitchListener {
 			for(ImmutablePort port : sw.getPorts()) {
 				s += port.getName() + " ";
 			}
-			logger.info("MAC Address: {} seen on switch: {}",
-					macadd,
-					sw.getId());
+			logger.info("mac in long " + sourceMACHash + " MAC Address: " + macadd + " seen on switch: " + sw.getId());
 			logger.info("the ports:" + s);
 			try {
 				server.addHostSwitchMap(macadd, sw.getId());
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
-		}	
-
-		/*ConcurrentSkipListSet<Long> dpids = new ConcurrentSkipListSet<Long>(floodlightProvider.getAllSwitchDpids());
-		String alldpids = "";
-		for(Long dpid : dpids) {
-			alldpids += dpid + " ";
 		}
-		logger.info("---------------alldpids:" + alldpids);
-		logger.info("################################ of links:" + 
-		linkDiscoverer.getLinks().size() + ":" + 
-				linkDiscoverer.getSwitchLinks());*/
+
 		Command c = Command.CONTINUE;
 		if(msg.getType() == OFType.PACKET_IN) {
 			c = this.processPacketInMessage(sw, (OFPacketIn)msg, cntx);
@@ -430,6 +423,7 @@ IOFSwitchListener {
 		match.loadFromPacket(pi.getPacketData(), pi.getInPort());
 		Long sourceMac = Ethernet.toLong(match.getDataLayerSource());
 		Long destMac = Ethernet.toLong(match.getDataLayerDestination());
+		
 		Short vlan = match.getDataLayerVirtualLan();
 		if ((destMac & 0xfffffffffff0L) == 0x0180c2000000L) {
 			logger.info("ignoring packet addressed to 802.1D/Q reserved addr: switch {} vlan {} dest MAC {}",
