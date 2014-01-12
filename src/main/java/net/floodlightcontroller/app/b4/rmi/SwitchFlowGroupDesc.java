@@ -13,6 +13,8 @@ public class SwitchFlowGroupDesc implements Serializable {
 	Long srcSwid;
 	Long dstSwid;
 	Long bw;
+	
+	Long bwRemain;//used when allocation
 	//use src and dst to identify a flowgroup, 
 	//local use srcsw and dstsw and the OFMatch obj to
 	//compute allocation
@@ -27,6 +29,7 @@ public class SwitchFlowGroupDesc implements Serializable {
 		this.bw = bw;
 		this.fgSrcSwid = fgSrcSwid;
 		this.fgDstSwid = fgDstSwid;
+		this.bwRemain = bw;
 		//this.matches = matches;
 	}
 	
@@ -42,6 +45,14 @@ public class SwitchFlowGroupDesc implements Serializable {
 		return s;
 	}
 	
+
+	public Long getRemaining() {
+		return this.bwRemain;
+	}
+	
+	public void setRemaing(Long remain) {
+		this.bwRemain = remain;
+	}
 	public void setSrc(Long swid) {
 		this.srcSwid = swid;
 	}

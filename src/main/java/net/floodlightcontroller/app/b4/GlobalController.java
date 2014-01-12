@@ -132,6 +132,10 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		}		
 	}
 
+	
+	public Short getPortBySwid(Long srcSwid, Long dstSwid) {
+		return this.informationBase.getPortBySwid(srcSwid, dstSwid);
+	}
 	@Override
 	public boolean isCallbackOrderingPrereq(OFType type, String name) {
 		// TODO Auto-generated method stub
@@ -216,7 +220,13 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		configFilePath = filepath;
 		logger.debug("===============>>>>>>>>>>>>>>>>>>>>>>>>configfile set to:" + configFilePath);
 		informationBase.readConfigFromFile(filepath);
+		informationBase.computeTGBwAllocation();
+		informationBase.setUpMatches();
 		processAndSend();
+	}
+	
+	public Long getSwidByHostMac(String mac) {
+		return informationBase.getSwidByHostMac(mac);
 	}
 	
 	public void processAndSend() {

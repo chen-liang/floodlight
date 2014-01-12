@@ -52,4 +52,13 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 		controllerRef.sendFlowDemand(map, id);
 	}
 
+	@Override
+	public Long getSwidByHostMac(String mac) throws RemoteException {
+		return controllerRef.getSwidByHostMac(mac);
+	}
+	
+	@Override
+	public Short getPortBySwid(Long srcSwid, Long dstSwid) {
+		return controllerRef.getPortBySwid(srcSwid, dstSwid);
+	}
 }

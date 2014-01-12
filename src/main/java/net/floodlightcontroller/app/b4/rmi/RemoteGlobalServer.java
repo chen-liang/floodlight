@@ -20,4 +20,8 @@ public interface RemoteGlobalServer extends Remote {
 	
 	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id) throws RemoteException;
 	
+	public Long getSwidByHostMac(String mac) throws RemoteException;
+	
+	public Short getPortBySwid(Long srcSwid, Long dstSwid) throws RemoteException;
+	
 }

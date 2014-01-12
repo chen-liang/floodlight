@@ -13,11 +13,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
 import net.floodlightcontroller.packet.Ethernet;
-import net.floodlightcontroller.routing.Link;
 
 import org.openflow.protocol.OFMatch;
 import org.openflow.util.HexString;
-import org.python.antlr.PythonParser.continue_stmt_return;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +24,6 @@ import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sun.org.apache.bcel.internal.generic.ALOAD;
 
 public class InformationBase {
 
@@ -77,13 +74,16 @@ public class InformationBase {
 	class SwitchInfo {
 		long dpid;
 		ConcurrentHashMap<Short, Long> peers; //key port id, value peer swid
+		ConcurrentHashMap<Long, Short> peersInverted; //key peer swid, value port 
 		
 		public SwitchInfo() {
 			peers = new ConcurrentHashMap<Short, Long>();
+			peersInverted = new ConcurrentHashMap<Long, Short>();
 		}
 		
 		public void addLink(Short localport, Long remoteId) {
 			peers.put(localport, remoteId);
+			peersInverted.put(remoteId, localport);
 		}
 	}	
 	
@@ -222,6 +222,12 @@ public class InformationBase {
 		return true; //might want to return false later
 	}
 	
+	public Long getSwidByHostMac(String mac) {
+		if(!hostSwitchMap.containsKey(mac))
+			return null;
+		return hostSwitchMap.get(mac);
+	}
+	
 	public boolean addControllerSwMap(Long swid, int id) {
 		if(localControllerSwMap.containsKey(id)){
 			CopyOnWriteArrayList<Long> swids = localControllerSwMap.get(id);
@@ -238,27 +244,41 @@ public class InformationBase {
 		return true;
 	}
 	
+	
+	public Short getPortBySwid(Long srcSwid, Long dstSwid) {
+		if(!allSwitchInfo.containsKey(srcSwid)) {
+			logger.debug(srcSwid + " no such src:" + allSwitchInfo.keySet());
+			return null;
+		}
+		SwitchInfo info = allSwitchInfo.get(srcSwid);
+		if(!info.peersInverted.containsKey(dstSwid)) {
+			logger.debug(dstSwid + " no such dst:" + info.peersInverted.keySet() + ":" + info.peers.keySet());
+			return null;
+		}
+		return info.peersInverted.get(dstSwid);
+	}
+	
 	public boolean addSwLink(Long src, Short srcPort, Long dst, Short dstPort) {	
 		
 		SwitchInfo srcswinfo;
 		SwitchInfo dstswinfo;
-		if(allSwitchInfo.contains(src)) {
+		if(allSwitchInfo.containsKey(src)) {
 			srcswinfo = allSwitchInfo.get(src);			
 		} else {
 			srcswinfo = new SwitchInfo();
 		}
 		srcswinfo.addLink(srcPort, dst);
 		allSwitchInfo.put(src, srcswinfo);
-		logger.info("adding link from:" + src + "on port " + srcPort + " to " + dst);
+		logger.info("adding link from:" + src  + " to " + dst + " on port " + srcPort);
 		
-		if(allSwitchInfo.contains(dst)) {
+		if(allSwitchInfo.containsKey(dst)) {
 			dstswinfo = allSwitchInfo.get(dst);
 		} else {
 			dstswinfo = new SwitchInfo();
 		}
 		dstswinfo.addLink(dstPort, src);
 		allSwitchInfo.put(dst, dstswinfo);
-		logger.info("adding link from:" + dst + "on port " + dstPort + " to " + src);
+		logger.info("adding link from:" + dst  + " to " + src + "on port " + dstPort);
 		return true;
 	}
 	
@@ -427,6 +447,21 @@ public class InformationBase {
 			//compute fg's preferred tunnel
 			HashMap<String, LinkedList<String>> preference =
 					computeFGpreference(currAvaTunnel, currFGsNeedBW);
+
+			//if some fg does not appear in all tunnel preferences,
+			//the only reason at this point, is because it is impossible
+			//to any tunnel that can possibly satisfy this fg!!!
+			LinkedList<String> fgsCanBeSatisfied = new LinkedList<String>();
+			for(String tid : preference.keySet()) {
+				LinkedList<String> list = preference.get(tid);
+				fgsCanBeSatisfied.addAll(list);
+			}
+			for(int i = currFGsNeedBW.size() - 1;i>=0;i--) {
+				if(!fgsCanBeSatisfied.contains(currFGsNeedBW.get(i))) {
+					logger.debug("THIS FG CAN NOT BW SATISFIED:" + currFGsNeedBW.get(i));
+					currFGsNeedBW.remove(i);
+				}
+			}
 			//according to tunnel preference, transform it to preference on link
 			HashMap<Long, HashMap<Long, LinkedList<String>>> linkPreference = 
 					createLinkPeference(preference);
@@ -532,6 +567,7 @@ public class InformationBase {
 				logger.debug(ss);
 			}
 		}		
+		
 		logger.debug("FG bw allocation finished!!");
 		for(String fgid : allFGBW.keySet()) {
 			logger.debug(fgid + "->" + allFGBW.get(fgid));
@@ -1087,13 +1123,6 @@ public class InformationBase {
 			+ " # of tgs:" + allTGs.size()
 			+ " # of fgs:" + allFGs.size());
 			
-			for(TunnelGroup tg : allTGs.values())
-				computeTGBWallocation(tg);
-			
-			for(OFMatch match : flowByteCount.keySet()) {
-				lookupFgForMatch(match);
-			}
-			
 			return true;
 		} catch (JsonParseException e) {
 			e.printStackTrace();
@@ -1103,4 +1132,18 @@ public class InformationBase {
 			return false;
 		}
 	}
+	
+	
+	//the interesting part!!!!!!!!
+	public void computeTGBwAllocation() {
+		for(TunnelGroup tg : allTGs.values())
+			computeTGBWallocation(tg);
+	}
+
+	public void setUpMatches() {
+		for(OFMatch match : flowByteCount.keySet()) {
+			lookupFgForMatch(match);
+		}
+	}
+	
 }
