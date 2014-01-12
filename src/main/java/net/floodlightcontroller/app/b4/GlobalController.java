@@ -8,6 +8,7 @@ import java.rmi.registry.Registry;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteLocalClient;
+import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
@@ -214,6 +216,24 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		configFilePath = filepath;
 		logger.debug("===============>>>>>>>>>>>>>>>>>>>>>>>>configfile set to:" + configFilePath);
 		informationBase.readConfigFromFile(filepath);
+		processAndSend();
+	}
+	
+	public void processAndSend() {
+		HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> swfgdescmap = 
+				informationBase.getSwitchFGDesc();
+		if(swfgdescmap == null) {
+			logger.debug("NOTE null sw fg map");
+			return;
+		}
+		for(Integer conid : swfgdescmap.keySet()) {
+			logger.debug("Sending swfg info to :" + conid);
+			try {
+				allLocalHandlers.get(conid).sendSwFGDesc(swfgdescmap.get(conid));
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+		}
 	}
 
 }

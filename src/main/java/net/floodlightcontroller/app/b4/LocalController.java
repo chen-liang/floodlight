@@ -32,6 +32,7 @@ import org.openflow.protocol.statistics.OFStatisticsType;
 import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
+import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -105,10 +106,10 @@ IOFSwitchListener {
     protected static final boolean LEARNING_SWITCH_REVERSE_FLOW = true;
 	/////////////////////////////////////////
     
-    protected HashMap<String, HashMap<String,FlowStatsDesc>> computeFlowDemand(LinkedList<OFStatistics> values) {
+    protected HashMap<String, HashMap<String,FlowStatsDesc>> 
+    computeFlowDemand(LinkedList<OFStatistics> values) {
     	if(values.size() == 0) 
-    		return null;
-    	
+    		return null;    	
     	//whether makes this a member variable? by doing so we can record all histories, but do we want to do that?
     	HashMap<String, HashMap<String,FlowStatsDesc>> map = new HashMap<String, HashMap<String,FlowStatsDesc>>();
     	for(OFStatistics value : values) {
@@ -416,6 +417,19 @@ IOFSwitchListener {
 	public void switchChanged(long switchId) {
 		logger.info("++++++++++switch changed:" + switchId);
 	}
+
+	public boolean sendSwFGDesc(
+			HashMap<Long, LinkedList<SwitchFlowGroupDesc>> descmap)
+			throws RemoteException {
+		logger.debug("SWFG desc Reveived!!!!");
+		for(Long swid : descmap.keySet()) {
+			logger.debug("for swid:" + swid  + " " + descmap.get(swid));
+		}
+		return false;
+	}
+	
+	
+	///////////////////////////////////////////////////////
 
 	private Command processPacketInMessage(IOFSwitch sw, OFPacketIn pi, FloodlightContext cntx) {
 		// Read in packet data headers by using OFMatch

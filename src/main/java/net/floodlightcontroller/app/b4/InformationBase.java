@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.routing.Link;
 
@@ -56,6 +57,7 @@ public class InformationBase {
 	
 	ConcurrentHashMap<OFMatch, Long> flowByteCount;
 	ConcurrentHashMap<OFMatch, String> matchFGMap;
+	ConcurrentHashMap<String, LinkedList<OFMatch>> fgMatches;
 	
 	
 	//stores which link is on which tunnel
@@ -65,9 +67,12 @@ public class InformationBase {
 	//swid as the key to eliminate ambiguity
 	ConcurrentHashMap<Long, ConcurrentHashMap<Long, LinkedList<String>>> swidTunnelMap;
 	
+	
+	HashMap<Long, LinkedList<SwitchFlowGroupDesc>> currDescmap;
+	HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> currControllerSwitchFGDesc;
+	
 	Long linkCap;
 	Long fgCap;
-	ConcurrentHashMap<String, LinkedList<OFMatch>> fgMatches;
 	
 	class SwitchInfo {
 		long dpid;
@@ -220,10 +225,14 @@ public class InformationBase {
 	public boolean addControllerSwMap(Long swid, int id) {
 		if(localControllerSwMap.containsKey(id)){
 			CopyOnWriteArrayList<Long> swids = localControllerSwMap.get(id);
-			swids.add(swid);
+			//there might be duplicate call that add the same sw
+			//this is because this method is called per switch port
+			if(!swids.contains(swid))
+				swids.add(swid);
 		} else {
 			CopyOnWriteArrayList<Long> swids = new CopyOnWriteArrayList<Long>();
-			swids.add(swid);
+			if(!swids.contains(swid))
+				swids.add(swid);
 			localControllerSwMap.put(id, swids);
 		}
 		return true;
@@ -527,7 +536,94 @@ public class InformationBase {
 		for(String fgid : allFGBW.keySet()) {
 			logger.debug(fgid + "->" + allFGBW.get(fgid));
 		}
+		
+		currDescmap = computeFlowInstallation();
+		currControllerSwitchFGDesc = generateFGDescForAllController(currDescmap);
+	}
+	
+	public HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> getSwitchFGDesc() {
+		return currControllerSwitchFGDesc;
+	}
+	
+	public HashMap<Long, LinkedList<SwitchFlowGroupDesc>> getDescriptionMap() {
+		return currDescmap;
+	}
+	
+	//input key = swid, value = swdesclist
+	private HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> 
+	generateFGDescForAllController(HashMap<Long, LinkedList<SwitchFlowGroupDesc>> descmap) {
+		
+		HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> controllerSwitchFGDesc = 
+				new HashMap<Integer, HashMap<Long,LinkedList<SwitchFlowGroupDesc>>>();
+		
+		for(Integer conid : localControllerSwMap.keySet()) {
+			CopyOnWriteArrayList<Long> swids = localControllerSwMap.get(conid);
+			logger.debug("now comes to con:" + conid + " with sw:" + swids);
+			for(Long currswid : swids) {
+				logger.debug("now comes to sw:" + currswid);
+				if(!descmap.containsKey(currswid)) 
+					continue;
+				//add the desc to the controller-sw map!!
+				if(controllerSwitchFGDesc.containsKey(conid)) {
+					HashMap<Long,LinkedList<SwitchFlowGroupDesc>> currConSwMap = 
+							controllerSwitchFGDesc.get(conid);
+					if(currConSwMap.containsKey(currswid)) {
+						currConSwMap.get(currswid).addAll(descmap.get(currswid));
+						logger.debug("now it is2 ::::" + currConSwMap.get(currswid));
+					} else {
+						LinkedList<SwitchFlowGroupDesc> desclist = new LinkedList<SwitchFlowGroupDesc>();
+						desclist.addAll(descmap.get(currswid));
+						currConSwMap.put(currswid, desclist);
+						logger.debug("now it is ::::" + currConSwMap.get(currswid));
+					}
+				} else {
+					LinkedList<SwitchFlowGroupDesc> desclist = new LinkedList<SwitchFlowGroupDesc>();
+					desclist.addAll(descmap.get(currswid));
+					HashMap<Long,LinkedList<SwitchFlowGroupDesc>> currConSwMap = new HashMap<Long, LinkedList<SwitchFlowGroupDesc>>();
+					currConSwMap.put(currswid, desclist);
+					controllerSwitchFGDesc.put(conid, currConSwMap);
 
+					logger.debug("now it is3 ::::" + currConSwMap.get(currswid));
+				}
+			}
+		}
+		
+		return controllerSwitchFGDesc;
+	}
+
+	
+	private HashMap<Long, LinkedList<SwitchFlowGroupDesc>> computeFlowInstallation() {
+		HashMap<Long, LinkedList<SwitchFlowGroupDesc>> swfgmap = new HashMap<Long, LinkedList<SwitchFlowGroupDesc>>();
+		for(String fgid : FgToTunnelMap.keySet()) {
+			ConcurrentHashMap<String, Long> map = FgToTunnelMap.get(fgid);
+			for(String tid : map.keySet()) {
+				Long bw = map.get(tid);
+				LinkedList<Long> allsws = allTs.get(tid).path;
+				for(int i = 0;i<allsws.size() - 1;i++) {
+					Long id1 = allsws.get(i);
+					Long id2 = allsws.get(i + 1);
+					Long fgSrcSwid = allFGs.get(fgid).srcSwid;
+					Long fgDstSwid = allFGs.get(fgid).dstSwid;
+					SwitchFlowGroupDesc desc = 
+							new SwitchFlowGroupDesc(id1, id2, bw, fgSrcSwid, fgDstSwid, fgMatches.get(fgid));
+					if(swfgmap.containsKey(id1)) {
+						swfgmap.get(id1).add(desc);
+					} else {
+						LinkedList<SwitchFlowGroupDesc> list = new LinkedList<SwitchFlowGroupDesc>();
+						list.add(desc);
+						swfgmap.put(id1, list);
+					}
+				}
+			}
+		}
+		logger.debug("the list:");
+		for(Long srcid : swfgmap.keySet()) {
+			LinkedList<SwitchFlowGroupDesc> descl = swfgmap.get(srcid);
+			for(SwitchFlowGroupDesc desc : descl)
+				logger.debug(desc.getSrc() + "->" + desc.getDst() + " " 
+			+ desc.getFgSrcSwid() + "--->" + desc.getFgDstSwid() + ":" + desc.getBw());
+		}
+		return swfgmap;
 	}
 	
 	private HashMap<Long, HashMap<Long, LinkedList<String>>> createLinkPeference(
