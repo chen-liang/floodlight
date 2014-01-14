@@ -193,8 +193,10 @@ IOFSwitchListener {
 							} else {
 								logger.debug("............" + tinfo.getPath());
 							}
-							if(tunnelCovered.contains(tinfo.getTid()))
+							if(tunnelCovered.contains(tinfo.getTid())) {
+								logger.debug("already installed for this tunnel:" + tinfo.getTid());
 								continue;
+							}
 							pushFlowToSwitches(tinfo.getPath(), match, true);
 						}
 					} else {
@@ -629,52 +631,57 @@ IOFSwitchListener {
 				.setNetworkDestination(match.getNetworkSource())
 				.setTransportSource(match.getTransportDestination())
 				.setTransportDestination(match.getTransportSource());
-		for(int i = 0;i<switches.size() - 1;i++) {
-			Long srcSwid = switches.get(i);
-			Long dstSwid = switches.get(i + 1);
+		for(int i = 1;i<switches.size() - 1;i++) {
+			Long beforeswid = switches.get(i - 1);
+			Long middleswid = switches.get(i);
+			Long afterswid = switches.get(i + 1);
+			//Long srcSwid = switches.get(i);
+//			/Long dstSwid = switches.get(i + 1);
 
-			if(!swLocalCache.contains(srcSwid))
+			if(!swLocalCache.contains(middleswid))
 				continue;
-			IOFSwitch sw = floodlightProvider.getSwitch(srcSwid);
+			IOFSwitch sw = floodlightProvider.getSwitch(middleswid);
 			try {
-				Short outPort = server.getPortBySwid(srcSwid, dstSwid);
-				Short reverseOutPort = server.getPortBySwid(dstSwid, srcSwid);
-				logger.debug("from " + srcSwid + " to " + dstSwid + " p " + outPort + " rp " + reverseOutPort);
-				if(outPort == null) {
-					logger.debug("NOTE could not find link from " + srcSwid + " to " + dstSwid);
+				Short portOnMiddleToBefore = server.getPortBySwid(middleswid, beforeswid);
+				Short portOnMiddleToAfter = server.getPortBySwid(middleswid, afterswid);
+				//Short outPort = server.getPortBySwid(srcSwid, dstSwid);
+				//Short reverseOutPort = server.getPortBySwid(dstSwid, srcSwid);
+				logger.debug("from " + middleswid + " to before:" + beforeswid + " p " + portOnMiddleToBefore + " to after:" + afterswid + " p:" + portOnMiddleToAfter);
+				if(portOnMiddleToBefore == null) {
+					logger.debug("NOTE could not find link from " + middleswid + " to " + beforeswid);
 					return;
 				}
-				if(reverseOutPort == null) {
-					logger.debug("NOTE could not find link from " + dstSwid + " to " + srcSwid);
+				if(portOnMiddleToAfter == null) {
+					logger.debug("NOTE could not find link from " + middleswid + " to " + afterswid);
 					return;
 				}
-				if(matchesWeHaveSeen.containsKey(srcSwid)) {
-					if(matchesWeHaveSeen.get(srcSwid).contains(match)) {
+				if(matchesWeHaveSeen.containsKey(middleswid)) {
+					if(matchesWeHaveSeen.get(middleswid).contains(match)) {
 						//do nothing
 					} else {
-						matchesWeHaveSeen.get(srcSwid).add(match);
+						matchesWeHaveSeen.get(middleswid).add(match);
 					}
 				} else {
 					LinkedList<OFMatch> list = new LinkedList<OFMatch>();
 					list.add(match);
-					matchesWeHaveSeen.put(srcSwid, list);
+					matchesWeHaveSeen.put(middleswid, list);
 				}
 				this.writeFlowMod(
 						sw, 
 						OFFlowMod.OFPFC_ADD, 
 						OFPacketOut.BUFFER_ID_NONE, 
-						match.setInputPort(reverseOutPort), 
-						outPort, 
+						match.setInputPort(portOnMiddleToBefore), 
+						portOnMiddleToAfter, 
 						LocalController.CONFIG_INTERVAL);
-				logger.debug("on " + sw.getId() + " outport:" + outPort
+				logger.debug("on " + sw.getId() + " outport:" + portOnMiddleToAfter + " inport:" + portOnMiddleToBefore
 				+" installing flow!!" + match);
 				if(reversePath == true) {
 					this.writeFlowMod(sw, 
 							OFFlowMod.OFPFC_ADD, -1, 
-							reverseMatch.setInputPort(outPort), 
-							reverseOutPort, 
+							reverseMatch.setInputPort(portOnMiddleToAfter), 
+							portOnMiddleToBefore, 
 							LocalController.CONFIG_INTERVAL);
-					logger.debug("installing flow!! reverse" + " outport:" + reverseOutPort
+					logger.debug("installing flow!! reverse" + " outport:" + portOnMiddleToBefore + " inport:" + portOnMiddleToAfter
 							+ reverseMatch);
 				}
 			} catch (RemoteException e) {
@@ -687,26 +694,26 @@ IOFSwitchListener {
 			Long dstMac = Ethernet.toLong(match.getDataLayerDestination());
 			String dstMacString = HexString.toHexString(dstMac);
 			Long dstHostSwid = server.getSwidByHostMac(dstMacString);
-			Long dstNextHop;
-			if(dstHostSwid.equals(switches.getLast())) {
-				dstNextHop = switches.get(switches.size() - 2);
-			} else {
-				dstNextHop = switches.get(2);
-			}
+			Long dstNextHop = dstHostSwid.equals(switches.getLast())?switches.get(switches.size() - 2) : switches.get(1);
 			installFlowToHostFromSwitch(dstMacString, dstHostSwid, dstNextHop, match);
-			if(reversePath == true) {
-				Long srcMac = Ethernet.toLong(match.getDataLayerSource());
-				String srcMacString = HexString.toHexString(srcMac);
-				Long srcHostSwid = server.getSwidByHostMac(srcMacString);
-				Long srcNextHop = dstHostSwid.equals(switches.getLast())?switches.get(2) : switches.get(switches.size() - 2);
-				installFlowToHostFromSwitch(srcMacString, srcHostSwid, srcNextHop, reverseMatch);
-			}
+			//the same for the first sw on the path
+			Long reversedstMac = Ethernet.toLong(match.getDataLayerSource());
+			String reversedstMacString = HexString.toHexString(reversedstMac);
+			Long reversedstHostSwid = server.getSwidByHostMac(reversedstMacString);
+			Long reversedstNextHop = dstHostSwid.equals(switches.getLast())?switches.get(1) : switches.get(switches.size() - 2);
+			installFlowToHostFromSwitch(reversedstMacString, reversedstHostSwid, reversedstNextHop, reverseMatch);
 		} catch(RemoteException e) {
 			e.printStackTrace();
 		}
 	}
 	
 	private void installFlowToHostFromSwitch(String dstMacString, Long swid, Long nextHop, OFMatch match) {
+		OFMatch reverseMatch = match.clone().setDataLayerSource(match.getDataLayerDestination())
+				.setDataLayerDestination(match.getDataLayerSource())
+				.setNetworkSource(match.getNetworkDestination())
+				.setNetworkDestination(match.getNetworkSource())
+				.setTransportSource(match.getTransportDestination())
+				.setTransportDestination(match.getTransportSource());
 		Short port = null;
 		Short peerPort = null;
 		try {
@@ -720,13 +727,14 @@ IOFSwitchListener {
 			return;
 		}
 		if(peerPort == null) {
-			logger.debug("NOTE " + swid + "could not find port to peer" + nextHop);
+			logger.debug("NOTE " + swid + " could not find port to peer" + nextHop);
 			return;
 		}
 		IOFSwitch sw = floodlightProvider.getSwitch(swid);
-		logger.debug("on" + sw.getId() + " install to Host flow on port:" + port + " with this port to peer " +  peerPort);
-		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
 		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(peerPort), port, LocalController.CONFIG_INTERVAL);
+		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, reverseMatch.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
+		logger.debug("on" + sw.getId() + " install to Host flow on outport:" + port + " inport:" +  peerPort + " for " + match);
+		logger.debug("on" + sw.getId() + " also reverse path:outport:" + peerPort + " inport:" + port + " for " + reverseMatch);
 	}
 	/*
 	private void pushFlowModGivenSwFGDesc(OFMatch match, SwitchFlowGroupDesc desc) {

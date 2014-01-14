@@ -270,7 +270,7 @@ public class InformationBase {
 		}
 		SwitchInfo info = allSwitchInfo.get(srcSwid);
 		if(!info.peersInverted.containsKey(dstSwid)) {
-			logger.debug(dstSwid + " no such dst:" + info.peersInverted.keySet() + ":" + info.peers.keySet());
+			logger.debug("for src:" + srcSwid + " no such dst:" + dstSwid + " all dst:" + info.peersInverted.keySet() + ":" + info.peers.keySet());
 			return null;
 		}
 		return info.peersInverted.get(dstSwid);
