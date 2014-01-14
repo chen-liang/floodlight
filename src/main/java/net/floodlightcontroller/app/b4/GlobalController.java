@@ -18,10 +18,12 @@ import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.floodlightcontroller.app.b4.InformationBase.TunnelGroup;
 import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteLocalClient;
 import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
+import net.floodlightcontroller.app.b4.rmi.TunnelInfo;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
@@ -102,8 +104,12 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		return lh;
 	}
 	
-	public boolean addHostSwitchMap(String mac, Long swid) {
-		return informationBase.addHostSwitchMap(mac, swid);
+	public boolean addHostSwitchMap(String mac, Long swid, Short port) {
+		return informationBase.addHostSwitchMap(mac, swid, port);
+	}
+	
+	public Short getPortOnSwByMac(Long swid, String mac, int id) {
+		return informationBase.getPortOnSwByMac(swid, mac, id);
 	}
 	
 	public boolean addSwLink(Long src, Short srcPort, Long dst, Short dstPort) {
@@ -220,16 +226,24 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		configFilePath = filepath;
 		logger.debug("===============>>>>>>>>>>>>>>>>>>>>>>>>configfile set to:" + configFilePath);
 		informationBase.readConfigFromFile(filepath);
-		informationBase.computeTGBwAllocation();
-		informationBase.setUpMatches();
-		processAndSend();
+		process();
+		//sendToLocal();
 	}
 	
 	public Long getSwidByHostMac(String mac) {
-		return informationBase.getSwidByHostMac(mac);
+		return informationBase.getSwitchByMac(mac);
 	}
 	
-	public void processAndSend() {
+	private void process() {
+		informationBase.computeTGBwAllocation();
+		informationBase.setUpMatches();
+	}
+	
+	private void sendToLocal() {
+		/*
+		 * return a map, key = conid, value = <key = swid, value = list of fgs that needs installation on this>
+		 */
+		/*
 		HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> swfgdescmap = 
 				informationBase.getSwitchFGDesc();
 		if(swfgdescmap == null) {
@@ -243,7 +257,23 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
-		}
+		}*/
+	}
+	
+	public void releaseTunnelCapacity(String tid, Long cap) {
+		informationBase.releaseTunnelCapacity(tid, cap);
+	}
+	
+	public Long getTunnelCapacity(String tid) {
+		return informationBase.getTunnelCapacity(tid);
+	}
+	
+	public LinkedList<TunnelInfo> getTunnelInfoBySrcDst(String srcMAC, String dstMAC) {
+		return informationBase.getTunnelInfoBySrcDst(srcMAC, dstMAC);
+	}
+	//the interesting part!!!!!!!!
+	public boolean consumeTunnelCapacity(String tid, Long cap) {
+		return informationBase.consumeTunnelCapacity(tid, cap);
 	}
 
 }

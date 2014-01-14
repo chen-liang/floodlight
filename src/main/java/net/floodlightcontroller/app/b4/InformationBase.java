@@ -12,10 +12,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
+import net.floodlightcontroller.app.b4.rmi.TunnelInfo;
 import net.floodlightcontroller.packet.Ethernet;
 
 import org.openflow.protocol.OFMatch;
 import org.openflow.util.HexString;
+import org.python.modules.synchronize;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,7 +32,7 @@ public class InformationBase {
 	protected static Logger logger;
 	CopyOnWriteArrayList<Long> allSwitches;
 	ConcurrentHashMap<Long, CopyOnWriteArrayList<Long>> allSwLinks;
-	ConcurrentHashMap<String, Long> hostSwitchMap; //key mac add, value swid
+	ConcurrentHashMap<String, HostSwitchPortPair> hostSwitchMap; //key mac add, value swid
 	ConcurrentHashMap<String,Long> portSwitchMap;
 	
 	ConcurrentHashMap<Long, SwitchInfo> allSwitchInfo;
@@ -70,6 +72,11 @@ public class InformationBase {
 	
 	Long linkCap;
 	Long fgCap;
+	
+	class HostSwitchPortPair {
+		Long swid;
+		Short port;
+	}
 	
 	class SwitchInfo {
 		long dpid;
@@ -149,7 +156,7 @@ public class InformationBase {
 		allSwitches = new CopyOnWriteArrayList<Long>();
 		allSwLinks = new ConcurrentHashMap<Long, CopyOnWriteArrayList<Long>>();
 		allSwitchInfo = new ConcurrentHashMap<Long, SwitchInfo>();
-		hostSwitchMap = new ConcurrentHashMap<String, Long>();
+		hostSwitchMap = new ConcurrentHashMap<String, HostSwitchPortPair>();
 		portSwitchMap = new ConcurrentHashMap<String, Long>();
 		localControllerSwMap = new ConcurrentHashMap<Integer, CopyOnWriteArrayList<Long>>();
 		allFGs = new ConcurrentHashMap<String, FlowGroup>();
@@ -216,16 +223,27 @@ public class InformationBase {
 		lookupFgForMatch(match);
 	}
 	
-	public boolean addHostSwitchMap(String mac, Long swid) {
-		hostSwitchMap.put(mac, swid);
+	public boolean addHostSwitchMap(String mac, Long swid, Short port) {
+		HostSwitchPortPair pair = new HostSwitchPortPair();
+		pair.swid = swid;
+		pair.port = port;
+		hostSwitchMap.put(mac, pair);
 		logger.info("base adding mac:" + mac + " is at " + swid);
 		return true; //might want to return false later
 	}
 	
-	public Long getSwidByHostMac(String mac) {
-		if(!hostSwitchMap.containsKey(mac))
+	public Short getPortOnSwByMac(Long swid, String mac, int id) {
+		if(!hostSwitchMap.containsKey(mac)) {
+			logger.debug("NOTE asking for non-existence mac address from " + id);
 			return null;
-		return hostSwitchMap.get(mac);
+		}
+		if(!hostSwitchMap.get(mac).swid.equals(swid)) {
+			String s = "found mac" + mac + " on " + hostSwitchMap.get(mac).swid 
+					+ " but supposed on " + swid; 
+			logger.debug(s);
+			return null;
+		}
+		return hostSwitchMap.get(mac).port;
 	}
 	
 	public boolean addControllerSwMap(Long swid, int id) {
@@ -286,7 +304,7 @@ public class InformationBase {
 		if(!hostSwitchMap.containsKey(mac)) {
 			return null;
 		} else {
-			return hostSwitchMap.get(mac);
+			return hostSwitchMap.get(mac).swid;
 		}
 	}
 	
@@ -450,7 +468,9 @@ public class InformationBase {
 
 			//if some fg does not appear in all tunnel preferences,
 			//the only reason at this point, is because it is impossible
-			//to any tunnel that can possibly satisfy this fg!!!
+			//for any tunnel to satisfy this fg!!! 
+			//So, we stop trying to give it more, what it has so far is
+			//what it will be granted
 			LinkedList<String> fgsCanBeSatisfied = new LinkedList<String>();
 			for(String tid : preference.keySet()) {
 				LinkedList<String> list = preference.get(tid);
@@ -573,8 +593,6 @@ public class InformationBase {
 			logger.debug(fgid + "->" + allFGBW.get(fgid));
 		}
 		
-		currDescmap = computeFlowInstallation();
-		currControllerSwitchFGDesc = generateFGDescForAllController(currDescmap);
 	}
 	
 	public HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> getSwitchFGDesc() {
@@ -623,10 +641,8 @@ public class InformationBase {
 				}
 			}
 		}
-		
 		return controllerSwitchFGDesc;
 	}
-
 	
 	private HashMap<Long, LinkedList<SwitchFlowGroupDesc>> computeFlowInstallation() {
 		HashMap<Long, LinkedList<SwitchFlowGroupDesc>> swfgmap = new HashMap<Long, LinkedList<SwitchFlowGroupDesc>>();
@@ -662,12 +678,17 @@ public class InformationBase {
 		return swfgmap;
 	}
 	
+	/*
+	 * return a map where key = linklowerswid, value = <key = linkhigherid, value = list of fg prefer this link>
+	 */
 	private HashMap<Long, HashMap<Long, LinkedList<String>>> createLinkPeference(
 			HashMap<String, LinkedList<String>> tunnelPreference) {
 		
 		HashMap<Long, HashMap<Long, LinkedList<String>>> linkPreference = 
 				new HashMap<Long, HashMap<Long,LinkedList<String>>>();
 		
+		//look at each of links that belong to any tunnel, if there is tunnel preference
+		//on that tunnel, the fg prefer the tunnel would prefer this link
 		for(Long lowerid : linkToTunnelMap.keySet()) {
 			ConcurrentHashMap<Long, LinkedList<String>> linkdstMap = linkToTunnelMap.get(lowerid);
 			
@@ -688,17 +709,22 @@ public class InformationBase {
 							//if there already exists entries that prefer this link
 							LinkedList<String> previousFGs = linkPreference.get(lowerid).get(higherid);
 							for(String s : fgPreferThisTunnel) {
+								if(previousFGs.contains(s)) {
+									logger.debug("NOTE adding duplicate fg entry!" + s + " to " + previousFGs);
+									continue;
+								}
 								previousFGs.add(s);
-								logger.debug("adding " + s + " to " + lowerid + "->" + higherid + " now " + previousFGs);
 							}
 							linkPreference.get(lowerid).put(higherid, previousFGs);
 						} else {
 							LinkedList<String> newFGs = new LinkedList<String>();
 							for(String s : fgPreferThisTunnel) {
+								if(newFGs.contains(s)) {
+									logger.debug("NOTE adding duplicate fg entry!" + s + " to " + newFGs);
+									continue;
+								}
 								newFGs.add(s);
-								logger.debug("adding2 " + s + " to " + lowerid + "->" + higherid + " now " + newFGs);
-							}
-							
+							}							
 							linkPreference.get(lowerid).put(higherid, newFGs);
 						}
 					} else {
@@ -717,9 +743,9 @@ public class InformationBase {
 		
 		for(Long lowerid : linkPreference.keySet()) {
 			for(Long higherid : linkPreference.get(lowerid).keySet()) {
-				String s = "<><><>><><><><" + lowerid + "><><>" + higherid + " "
-						+ (linkPreference.get(lowerid).get(higherid) == null?"NULLLLLL":linkPreference.get(lowerid).get(higherid).size());
-				s += " while " + linkToTunnelMap.get(lowerid).get(higherid).size();
+				String s = "for the link from " + lowerid + " to " + higherid + " the # of preference:"
+						+ (linkPreference.get(lowerid).get(higherid) == null?"0!":linkPreference.get(lowerid).get(higherid).size());
+				s += " while # of tunnel using this link:" + linkToTunnelMap.get(lowerid).get(higherid).size();
 				logger.debug(s);
 			}
 		}
@@ -744,7 +770,7 @@ public class InformationBase {
 	}
 	
 	//return a map, key is tunnel id, value is a list of fgs that prefer it
-	//NOTE assumes all ts in tunnels are available  
+	//NOTE assumes all ts in *tunnels* are available  
 	private HashMap<String, LinkedList<String>> computeFGpreference(LinkedList<String> tunnels, LinkedList<String> fgs) {
 		//ideally, should not be computed but should be configured...
 		HashMap<String, LinkedList<String>> preference = new HashMap<String, LinkedList<String>>();
@@ -960,8 +986,8 @@ public class InformationBase {
 	private void lookupFgForMatch(OFMatch match) {
 		String srcMac = HexString.toHexString(Ethernet.toLong(match.getDataLayerSource()));
 		String dstMac = HexString.toHexString(Ethernet.toLong(match.getDataLayerDestination()));
-		Long srcSwid = hostSwitchMap.get(srcMac);
-		Long dstSwid = hostSwitchMap.get(dstMac);
+		Long srcSwid = hostSwitchMap.get(srcMac).swid;
+		Long dstSwid = hostSwitchMap.get(dstMac).swid;
 		logger.debug("Looking for MATCH " 
 		+ " srcMac:" + srcMac + " dstMac:" + dstMac
 		+ " srcSw:" + srcSwid + " dstSw:" + dstSwid);
@@ -1083,7 +1109,7 @@ public class InformationBase {
 						tunnel.dstSwid = Long.parseLong(list.getLast());
 						Long lowerID = tunnel.srcSwid > tunnel.dstSwid?tunnel.dstSwid : tunnel.srcSwid;
 						Long higherID = tunnel.srcSwid == lowerID?tunnel.dstSwid : tunnel.srcSwid;
-						if(swidTunnelMap.contains(lowerID)) {
+						if(swidTunnelMap.containsKey(lowerID)) {
 							ConcurrentHashMap<Long, LinkedList<String>> map = 
 									swidTunnelMap.get(lowerID);
 							if(map.containsKey(higherID)) {
@@ -1133,11 +1159,66 @@ public class InformationBase {
 		}
 	}
 	
+	public void releaseTunnelCapacity(String tid, Long cap) {
+		synchronized(allTs) {
+			if(allTs.get(tid).capacity + cap > linkCap) {
+				logger.debug("NOTE tunnel cap exceed maximum!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " getting " + cap);
+				return;
+			}
+			allTs.get(tid).capacity += cap;
+		}
+	}
+	
+	public boolean consumeTunnelCapacity(String tid, Long cap) {
+		synchronized(allTs) {
+			if(allTs.get(tid).capacity - cap < 0) {
+				logger.debug("NOTE tunnel cap not sufficient!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " reducing " + cap);
+				return false;
+			}
+			allTs.get(tid).capacity += cap;
+		}
+		return true;
+	}
+	
+	public Long getTunnelCapacity(String tid) {
+		Long cap;
+		synchronized(allTs) {
+			cap = allTGs.get(tid).capacity;
+		}
+		return cap;
+	}
+	
+	public LinkedList<TunnelInfo> getTunnelInfoBySrcDst(String srcMAC, String dstMAC) {
+		Long srcSwid = getSwitchByMac(srcMAC);
+		Long dstSwid = getSwitchByMac(dstMAC);
+
+		logger.debug("::::::::::::::::::::::::::>>>>>>>>>" + srcMAC + "on" + srcSwid + "->" + dstMAC + " on " + dstSwid);
+		LinkedList<TunnelInfo> tinfolist = new LinkedList<TunnelInfo>();
+		for(String fgid : allFGs.keySet()) {
+			FlowGroup fg = allFGs.get(fgid);
+			if(fg.dstSwid.equals(dstSwid) && fg.srcSwid.equals(srcSwid)) {
+				//found the fg!
+				if(!FgToTunnelMap.containsKey(fgid)) {
+					logger.debug("NOTE asking tunnel info based an unassigned FG!" + fgid);
+					return null;
+				}
+				ConcurrentHashMap<String, Long> tmap = FgToTunnelMap.get(fgid);
+				for(String tid : tmap.keySet()) {
+					TunnelInfo tinfo = new TunnelInfo(tid, allTs.get(tid).path, allTs.get(tid).capacity);
+					tinfolist.add(tinfo);
+				}
+			}
+		}
+		return tinfolist;
+	}
 	
 	//the interesting part!!!!!!!!
 	public void computeTGBwAllocation() {
-		for(TunnelGroup tg : allTGs.values())
+		for(TunnelGroup tg : allTGs.values()) {
 			computeTGBWallocation(tg);
+			currDescmap = computeFlowInstallation();
+			currControllerSwitchFGDesc = generateFGDescForAllController(currDescmap);
+		}
 	}
 
 	public void setUpMatches() {

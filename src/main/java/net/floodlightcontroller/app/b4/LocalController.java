@@ -33,6 +33,7 @@ import net.floodlightcontroller.app.b4.rmi.FlowStatsDesc;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalConstant;
 import net.floodlightcontroller.app.b4.rmi.RemoteGlobalServer;
 import net.floodlightcontroller.app.b4.rmi.SwitchFlowGroupDesc;
+import net.floodlightcontroller.app.b4.rmi.TunnelInfo;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -68,8 +69,6 @@ import org.openflow.util.LRULinkedHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import sun.nio.cs.Surrogate;
-
 public class LocalController implements IOFMessageListener, IFloodlightModule, ILinkDiscoveryListener, 
 IOFSwitchListener {
 
@@ -79,6 +78,8 @@ IOFSwitchListener {
     protected ICounterStoreService counterStore;
 
 
+    protected ConcurrentHashMap<Long, LinkedList<OFMatch>> matchesWeHaveSeen;
+    
 	protected ConcurrentSkipListSet<Long> macAddresses;
 	protected ConcurrentSkipListSet<Long> swLocalCache;
 	protected static Logger logger;
@@ -100,6 +101,7 @@ IOFSwitchListener {
 	
 	HashMap<Long, LinkedList<SwitchFlowGroupDesc>> currSwFgmap;
 
+	protected ConcurrentSkipListSet<OFMatch> matchesWeCovered; //do not cover the same match in the same config interval
 	/////////////////////////////////////////
 	// Stores the learned state for each switch
 	protected Map<IOFSwitch, Map<MacVlanPair,Short>> macVlanToSwitchPortMap;
@@ -170,15 +172,37 @@ IOFSwitchListener {
 							e.printStackTrace();
 						}
 
-						HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchDescmap = matchMatchesToFgAllocations();
-						createFlowForMatchByMatchDescMap(matchDescmap);
+						//create map where key = match, value = list of desc for this match
+						//HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchDescmap = matchMatchesToFgAllocations(flowStatByMatch);
+
+						//create flows given the desc map!
+						//createFlowForMatchByMatchDescMap(matchDescmap);
 						
+						//matchesWeHaveSeen.clear();
+						
+						//NOTE this only works when we assume all src -> dst
+						//flows belong to the same tunnel
+						ConcurrentSkipListSet<String> tunnelCovered = 
+								new ConcurrentSkipListSet<String>();
+						for(OFMatch match : flowStatByMatch.keySet()) {
+							logger.debug("now for this match:" + match);
+							TunnelInfo tinfo = getSwitchInstallByMatch(match);
+							if(tinfo == null) {
+								logger.debug("no tunnel info! for this:" + match);
+								continue;
+							} else {
+								logger.debug("............" + tinfo.getPath());
+							}
+							if(tunnelCovered.contains(tinfo.getTid()))
+								continue;
+							pushFlowToSwitches(tinfo.getPath(), match, true);
+						}
 					} else {
 						//logger.info("***************************" + swid);
 					}
 				}
 				try {
-					Thread.sleep(CONFIG_INTERVAL*1000);
+					Thread.sleep(2000);
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
@@ -258,7 +282,8 @@ IOFSwitchListener {
 
 	@Override
 	public void init(FloodlightModuleContext context)
-			throws FloodlightModuleException {   
+			throws FloodlightModuleException {  
+		matchesWeHaveSeen = new ConcurrentHashMap<Long, LinkedList<OFMatch>>();
 		macVlanToSwitchPortMap =
 				new ConcurrentHashMap<IOFSwitch, Map<MacVlanPair,Short>>();
 		flowStatByMatch = new HashMap<OFMatch, Long>();
@@ -353,9 +378,17 @@ IOFSwitchListener {
 				s += port.getName() + " ";
 			}
 			logger.info("mac in long " + sourceMACHash + " MAC Address: " + macadd + " seen on switch: " + sw.getId());
-			logger.info("the ports:" + s);
+			
 			try {
-				server.addHostSwitchMap(macadd, sw.getId());
+				
+				if(msg.getType() == OFType.PACKET_IN) {
+					OFPacketIn pi = (OFPacketIn)msg;
+					s += "{{{{{--->" + pi.getInPort();
+					server.addHostSwitchMap(macadd, sw.getId(), pi.getInPort());
+				} else {
+					logger.debug("NOTE Unexcepted mag type " + msg.getType() + " from " + sw.getId());
+				}
+				logger.info("the ports:" + s);
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
@@ -363,7 +396,15 @@ IOFSwitchListener {
 
 		Command c = Command.CONTINUE;
 		if(msg.getType() == OFType.PACKET_IN) {
-			c = this.processPacketInMessage(sw, (OFPacketIn)msg, cntx);
+			OFPacketIn pi = (OFPacketIn)msg;
+			OFMatch pmatch = new OFMatch();
+			pmatch.loadFromPacket(pi.getPacketData(), pi.getInPort());
+			logger.debug("on" + sw.getId() + " seeing a match:" + pmatch);
+			if(!matchesWeHaveSeen.containsKey(sw.getId()) || 
+					!matchesWeHaveSeen.get(sw.getId()).contains(pmatch)) {
+				logger.debug("Never seen this match, create using default");
+				c = this.processPacketInMessage(sw, (OFPacketIn)msg, cntx);
+			}
 		}
 		return c;
 	}
@@ -442,13 +483,66 @@ IOFSwitchListener {
 		return true;
 	}
 	
-	protected HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchMatchesToFgAllocations() {
+	//return a tunnel that should install this match
+	private TunnelInfo getSwitchInstallByMatch(OFMatch match) {
+		TunnelInfo tinfoToUse = null;
+		try {
+			Long srcMacLong = Ethernet.toLong(match.getDataLayerSource());
+			Long dstMacLong = Ethernet.toLong(match.getDataLayerDestination());
+			String srcMac = HexString.toHexString(srcMacLong);
+			String dstMac = HexString.toHexString(dstMacLong);
+			LinkedList<TunnelInfo> tinfolist = server.getTunnelInfoBySrcDst(srcMac, dstMac);
+			logger.debug("for " + srcMac + "->" + dstMac + " the tunnel info:" + tinfolist.size());
+			if(tinfolist.size() == 0) {
+				//meaning no tunnel is found for this match
+				return null;
+			}
+			Long byteCount = flowStatByMatch.get(match);
+			
+			//IS THIS OKAY?
+			if(byteCount == null)
+				byteCount = new Long(0);
+			//now we have a bunch of tunnels avaliable for this match!
+			//pick one tunnel, acutally, anyone should be fine,
+			//but we pick the one with sufficient but least bw avaliable
+			//if unable to find a one with sufficient bw, pick the one with
+			//greatest bw
+			int index = 0;
+			Long currBw = Long.MAX_VALUE;
+			int idleindex = 0;
+			Long currIdleBw = Long.MIN_VALUE;
+			for(int i = 0;i<tinfolist.size();i++) {
+				TunnelInfo tinfo = tinfolist.get(i);
+				Long bw = tinfo.getBw();
+				if(bw > byteCount && bw < currBw) {
+					currBw = bw;
+					index = i;
+				}
+				if(bw > currIdleBw) {
+					currIdleBw = bw;
+					idleindex = i;
+				}
+			}
+			
+			if(currBw == Long.MAX_VALUE) {
+				//no tunnel has sufficient bw
+				tinfoToUse = tinfolist.get(idleindex);
+			} else {
+				tinfoToUse = tinfolist.get(index);
+			}	
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+		return tinfoToUse;
+	}
+	/*
+	private HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchMatchesToFgAllocations(HashMap<OFMatch, Long> flowStats) {
 		//look at all the matches, see which fg they
 		//belong to. Then assign those matches to the
 		//paths that belong to this fg
 		HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchDescMap = 
 				new HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>>();
-		for(OFMatch match : flowStatByMatch.keySet()) {
+		for(OFMatch match : flowStats.keySet()) {
 			Long srcMacLong = Ethernet.toLong(match.getDataLayerSource());
 			Long dstMacLong = Ethernet.toLong(match.getDataLayerDestination());
 			String srcMac = HexString.toHexString(srcMacLong);
@@ -462,6 +556,8 @@ IOFSwitchListener {
 						+ " c:" + flowStatByMatch.get(match);
 				logger.debug(s);
 				for(Long swid : swLocalCache) {
+					//for each switch controlled by this controller, check
+					//whether there is flow installation we need to do
 					if(!currSwFgmap.containsKey(swid)) {
 						logger.debug("no fg installing for this:" + swid);
 					} else {
@@ -480,6 +576,7 @@ IOFSwitchListener {
 								}
 							}
 						}
+						logger.debug("for this match" + match + "we want to install on sw:" + matchDescMap.get(match));
 					}
 				}				
 			} catch (RemoteException e) {
@@ -487,15 +584,16 @@ IOFSwitchListener {
 			}
 		}
 		return matchDescMap;
-	}
+	}*/
 	
+	/*
 	protected void createFlowForMatchByMatchDescMap(HashMap<OFMatch, LinkedList<SwitchFlowGroupDesc>> matchDescmap) {
 		for(OFMatch match : matchDescmap.keySet()) {
 			LinkedList<SwitchFlowGroupDesc> desclist = matchDescmap.get(match);
 			//look though all desc, get the one with highest available bw!
 			long currMostBw = Long.MAX_VALUE;
 			int index = -1;
-			long mostIdleBw = 0;
+			long mostIdleBw = Long.MIN_VALUE;
 			int mostIdleIndex = -1;
 			for(int i = 0;i<desclist.size();i++) {
 				SwitchFlowGroupDesc desc = desclist.get(i);
@@ -521,8 +619,116 @@ IOFSwitchListener {
 			logger.debug("TRY TO PUSH FLOW FOR MATCH:" + match + " ON DESC:" + descToUse);
 			this.pushFlowModGivenSwFGDesc(match, descToUse);
 		}
+	}*/
+	
+	
+	private void pushFlowToSwitches(LinkedList<Long> switches, OFMatch match, boolean reversePath) {
+		OFMatch reverseMatch = match.clone().setDataLayerSource(match.getDataLayerDestination())
+				.setDataLayerDestination(match.getDataLayerSource())
+				.setNetworkSource(match.getNetworkDestination())
+				.setNetworkDestination(match.getNetworkSource())
+				.setTransportSource(match.getTransportDestination())
+				.setTransportDestination(match.getTransportSource());
+		for(int i = 0;i<switches.size() - 1;i++) {
+			Long srcSwid = switches.get(i);
+			Long dstSwid = switches.get(i + 1);
+
+			if(!swLocalCache.contains(srcSwid))
+				continue;
+			IOFSwitch sw = floodlightProvider.getSwitch(srcSwid);
+			try {
+				Short outPort = server.getPortBySwid(srcSwid, dstSwid);
+				Short reverseOutPort = server.getPortBySwid(dstSwid, srcSwid);
+				logger.debug("from " + srcSwid + " to " + dstSwid + " p " + outPort + " rp " + reverseOutPort);
+				if(outPort == null) {
+					logger.debug("NOTE could not find link from " + srcSwid + " to " + dstSwid);
+					return;
+				}
+				if(reverseOutPort == null) {
+					logger.debug("NOTE could not find link from " + dstSwid + " to " + srcSwid);
+					return;
+				}
+				if(matchesWeHaveSeen.containsKey(srcSwid)) {
+					if(matchesWeHaveSeen.get(srcSwid).contains(match)) {
+						//do nothing
+					} else {
+						matchesWeHaveSeen.get(srcSwid).add(match);
+					}
+				} else {
+					LinkedList<OFMatch> list = new LinkedList<OFMatch>();
+					list.add(match);
+					matchesWeHaveSeen.put(srcSwid, list);
+				}
+				this.writeFlowMod(
+						sw, 
+						OFFlowMod.OFPFC_ADD, 
+						OFPacketOut.BUFFER_ID_NONE, 
+						match.setInputPort(reverseOutPort), 
+						outPort, 
+						LocalController.CONFIG_INTERVAL);
+				logger.debug("on " + sw.getId() + " outport:" + outPort
+				+" installing flow!!" + match);
+				if(reversePath == true) {
+					this.writeFlowMod(sw, 
+							OFFlowMod.OFPFC_ADD, -1, 
+							reverseMatch.setInputPort(outPort), 
+							reverseOutPort, 
+							LocalController.CONFIG_INTERVAL);
+					logger.debug("installing flow!! reverse" + " outport:" + reverseOutPort
+							+ reverseMatch);
+				}
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+		}
+		
+		try {
+			//for the last sw on the path, install flow on the port, this port should be connecting to host!
+			Long dstMac = Ethernet.toLong(match.getDataLayerDestination());
+			String dstMacString = HexString.toHexString(dstMac);
+			Long dstHostSwid = server.getSwidByHostMac(dstMacString);
+			Long dstNextHop;
+			if(dstHostSwid.equals(switches.getLast())) {
+				dstNextHop = switches.get(switches.size() - 2);
+			} else {
+				dstNextHop = switches.get(2);
+			}
+			installFlowToHostFromSwitch(dstMacString, dstHostSwid, dstNextHop, match);
+			if(reversePath == true) {
+				Long srcMac = Ethernet.toLong(match.getDataLayerSource());
+				String srcMacString = HexString.toHexString(srcMac);
+				Long srcHostSwid = server.getSwidByHostMac(srcMacString);
+				Long srcNextHop = dstHostSwid.equals(switches.getLast())?switches.get(2) : switches.get(switches.size() - 2);
+				installFlowToHostFromSwitch(srcMacString, srcHostSwid, srcNextHop, reverseMatch);
+			}
+		} catch(RemoteException e) {
+			e.printStackTrace();
+		}
 	}
 	
+	private void installFlowToHostFromSwitch(String dstMacString, Long swid, Long nextHop, OFMatch match) {
+		Short port = null;
+		Short peerPort = null;
+		try {
+			 port = server.getPortOnSwByMac(swid, dstMacString, handler.id);
+			 peerPort = server.getPortBySwid(swid, nextHop);
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+		if(port == null) {
+			logger.debug("NOTE could not find the mac " + dstMacString + " on that switch " + swid);
+			return;
+		}
+		if(peerPort == null) {
+			logger.debug("NOTE " + swid + "could not find port to peer" + nextHop);
+			return;
+		}
+		IOFSwitch sw = floodlightProvider.getSwitch(swid);
+		logger.debug("on" + sw.getId() + " install to Host flow on port:" + port + " with this port to peer " +  peerPort);
+		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
+		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(peerPort), port, LocalController.CONFIG_INTERVAL);
+	}
+	/*
 	private void pushFlowModGivenSwFGDesc(OFMatch match, SwitchFlowGroupDesc desc) {
 		Long srcSwid = desc.getSrc();
 		Long dstSwid = desc.getDst();
@@ -531,7 +737,6 @@ IOFSwitchListener {
 		try {
 			outPort = server.getPortBySwid(srcSwid, dstSwid);
 		} catch (RemoteException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 		if(outPort == null) {
@@ -540,7 +745,7 @@ IOFSwitchListener {
 		}
 		logger.debug("PUSHING FLOW!!!!!!!!!!!!! FOR MATCH:" + match);
 		this.writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match, outPort, LocalController.CONFIG_INTERVAL);
-	}
+	}*/
 	///////////////////////////////////////////////////////
 	//////////////////////////////////////////////////////
 
