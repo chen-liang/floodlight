@@ -17,7 +17,6 @@ import net.floodlightcontroller.packet.Ethernet;
 
 import org.openflow.protocol.OFMatch;
 import org.openflow.util.HexString;
-import org.python.modules.synchronize;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,7 +32,7 @@ public class InformationBase {
 	CopyOnWriteArrayList<Long> allSwitches;
 	ConcurrentHashMap<Long, CopyOnWriteArrayList<Long>> allSwLinks;
 	ConcurrentHashMap<String, HostSwitchPortPair> hostSwitchMap; //key mac add, value swid
-	ConcurrentHashMap<String,Long> portSwitchMap;
+	ConcurrentHashMap<String,PortSwitchPortPair> portSwitchMap;
 	
 	ConcurrentHashMap<Long, SwitchInfo> allSwitchInfo;
 	
@@ -74,6 +73,11 @@ public class InformationBase {
 	Long fgCap;
 	
 	class HostSwitchPortPair {
+		Long swid;
+		Short port;
+	}
+	
+	class PortSwitchPortPair {
 		Long swid;
 		Short port;
 	}
@@ -157,7 +161,7 @@ public class InformationBase {
 		allSwLinks = new ConcurrentHashMap<Long, CopyOnWriteArrayList<Long>>();
 		allSwitchInfo = new ConcurrentHashMap<Long, SwitchInfo>();
 		hostSwitchMap = new ConcurrentHashMap<String, HostSwitchPortPair>();
-		portSwitchMap = new ConcurrentHashMap<String, Long>();
+		portSwitchMap = new ConcurrentHashMap<String, PortSwitchPortPair>();
 		localControllerSwMap = new ConcurrentHashMap<Integer, CopyOnWriteArrayList<Long>>();
 		allFGs = new ConcurrentHashMap<String, FlowGroup>();
 		allTGs = new ConcurrentHashMap<String, TunnelGroup>();
@@ -205,7 +209,7 @@ public class InformationBase {
 		Long higherid = lowerid == id1?id2 : id1;
 		if(fullLinks.containsKey(lowerid)) {
 			if(fullLinks.get(lowerid).contains(higherid)) {
-				logger.debug("NOTE: re-setting full link!!!!");
+				logger.info("NOTE: re-setting full link!!!!");
 				return;
 			}
 			fullLinks.get(lowerid).add(higherid);
@@ -219,28 +223,95 @@ public class InformationBase {
 	
 	public void addByteCount(OFMatch match, Long byteCount) {
 		flowByteCount.put(match, byteCount);
-		logger.debug("adding byte count:" + match.toString() + " :" + byteCount + "--------");
+		logger.info("adding byte count:" + match.toString() + " :" + byteCount + "--------");
 		lookupFgForMatch(match);
 	}
 	
 	public boolean addHostSwitchMap(String mac, Long swid, Short port) {
-		HostSwitchPortPair pair = new HostSwitchPortPair();
+		//NOTE tricky thing here is that, it could be a switch not under control of that local controller
+		//UPDATE given the new detect packet, maybe this would not happen
+		String s = ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>add host to switch:" + mac + " seen on:" + swid + ":p:" + port;
+		if(portSwitchMap.containsKey(mac)) {
+			//this is actually a switch!!
+			//in this case, it means: on the *port* of switch *swid*, see another port 
+			//whose mac is *mac*, add this info on both switch(maybe no need to be on both?)
+			PortSwitchPortPair pair = portSwitchMap.get(mac);
+			SwitchInfo sinfo = allSwitchInfo.get(swid);
+			sinfo.addLink(port, pair.swid);
+			SwitchInfo peerinfo = allSwitchInfo.get(pair.swid);
+			peerinfo.addLink(pair.port, swid);
+			s += " it is a switch!!!! ";
+			logger.info("");
+			return true;
+		} else {
+			//not a switch at this point, but maybe later on will figure out that it a switch
+			if(hostSwitchMap.containsKey(mac)) {
+				logger.debug("NOTE already seen this host on:" + hostSwitchMap + " want it on?:" + swid);
+				return false;
+			}
+			HostSwitchPortPair pair = new HostSwitchPortPair();
+			pair.swid = swid;
+			pair.port = port;
+			hostSwitchMap.put(mac, pair);
+			logger.info("base adding mac:" + mac + " is at " + swid);
+			s += " it is a host";
+			logger.info(s);
+			return true; //might want to return false later
+		}
+	}
+	
+	//return true means local controller can send this info
+	//a second time, return false means this mac is already 
+	//processed, do not send again
+	public boolean portMacNoted(String mac, Long swid, Short port) {
+		if(!portSwitchMap.containsKey(mac)) {
+			//local said *port* on *swid* is connected to a port with *mac*
+			//but i don't even know *mac*!! the reason could be there is delay
+			//so do nothing at this point
+			return true;
+		}
+		//add mutual link to sws, at this point, *swid* is guaranteed
+		//to be known by global already, but due to delay, pair.swid
+		//might be unknown, but since pair is known, swid should also
+		//be known too
+		PortSwitchPortPair pair = portSwitchMap.get(mac);
+		SwitchInfo sw1 = allSwitchInfo.get(pair.swid);
+		sw1.addLink(pair.port, swid);
+		
+
+		SwitchInfo sw2 = allSwitchInfo.get(swid);
+		sw2.addLink(port, pair.swid);
+		return false;
+	}
+	
+	public boolean addPortSwitchMap(String mac, Short port, Long swid) {
+		if(portSwitchMap.containsKey(mac)) {
+			logger.info("NOTE adding duplicate port mac address:" + mac + " port:" + port);
+			return false;
+		}
+		PortSwitchPortPair pair = new PortSwitchPortPair();
 		pair.swid = swid;
 		pair.port = port;
-		hostSwitchMap.put(mac, pair);
-		logger.info("base adding mac:" + mac + " is at " + swid);
-		return true; //might want to return false later
+		portSwitchMap.put(mac, pair);
+		//tricky thing here is that we might already see this mac
+		//but back then, we did not know it is switch and added it
+		//as a host, if that so, need to fix that, otherwise, do nothing
+		if(hostSwitchMap.containsKey(mac)) {
+			logger.info(mac + " is not a host! remove from host map");
+			hostSwitchMap.remove(mac);
+		}
+		return true;
 	}
 	
 	public Short getPortOnSwByMac(Long swid, String mac, int id) {
 		if(!hostSwitchMap.containsKey(mac)) {
-			logger.debug("NOTE asking for non-existence mac address from " + id);
+			logger.info("NOTE asking for non-existence mac address from " + id);
 			return null;
 		}
 		if(!hostSwitchMap.get(mac).swid.equals(swid)) {
 			String s = "found mac" + mac + " on " + hostSwitchMap.get(mac).swid 
 					+ " but supposed on " + swid; 
-			logger.debug(s);
+			logger.info(s);
 			return null;
 		}
 		return hostSwitchMap.get(mac).port;
@@ -265,12 +336,12 @@ public class InformationBase {
 	
 	public Short getPortBySwid(Long srcSwid, Long dstSwid) {
 		if(!allSwitchInfo.containsKey(srcSwid)) {
-			logger.debug(srcSwid + " no such src:" + allSwitchInfo.keySet());
+			logger.info(srcSwid + " no such src:" + allSwitchInfo.keySet());
 			return null;
 		}
 		SwitchInfo info = allSwitchInfo.get(srcSwid);
 		if(!info.peersInverted.containsKey(dstSwid)) {
-			logger.debug("for src:" + srcSwid + " no such dst:" + dstSwid + " all dst:" + info.peersInverted.keySet() + ":" + info.peers.keySet());
+			logger.info("for src:" + srcSwid + " no such dst:" + dstSwid + " all dst:" + info.peersInverted.keySet() + ":" + info.peers.keySet());
 			return null;
 		}
 		return info.peersInverted.get(dstSwid);
@@ -308,14 +379,9 @@ public class InformationBase {
 		}
 	}
 	
-	public boolean addPortSwitchMap(String mac, Long swid) {
-		portSwitchMap.put(mac, swid);
-		return true;
-	}
-	
 
 	private void addFGtoTunnel(String fgid, String tid, Long bw) {
-		logger.debug("allocate fg " + fgid + " to tunnel " + tid + " with bw " + bw);
+		logger.info("allocate fg " + fgid + " to tunnel " + tid + " with bw " + bw);
 		if(FgToTunnelMap.containsKey(fgid)) {
 			ConcurrentHashMap<String, Long> bwmap = FgToTunnelMap.get(fgid);
 			if(bwmap.containsKey(tid)) {
@@ -334,7 +400,7 @@ public class InformationBase {
 	private void addAllFGsToTuneel(HashMap<String, String> preference, HashMap<String, Long> bwmap) {
 		for(String fgid : bwmap.keySet()) {
 			if(!preference.containsKey(fgid)) {
-				logger.debug("NOTE allocated bw but no tunnel???" + fgid);
+				logger.info("NOTE allocated bw but no tunnel???" + fgid);
 				continue;
 			}
 			String tid = preference.get(fgid);
@@ -360,7 +426,7 @@ public class InformationBase {
 		LinkedList<String> fullTunnel = new LinkedList<String>();
 		for(String fgid : fgBwMap.keySet()) {
 			if(!fgTunnelMap.containsKey(fgid)) {
-				logger.debug("NOTE allocated BW to fg when it has no tunnel!!!");
+				logger.info("NOTE allocated BW to fg when it has no tunnel!!!");
 				continue;
 			}
 			String tid = fgTunnelMap.get(fgid);
@@ -368,7 +434,7 @@ public class InformationBase {
 			Tunnel tunnel = allTs.get(tid);
 			LinkedList<Long> path = tunnel.path;
 			if(path.size() <= 1) {
-				logger.debug("NOTE a length 1 path!!! What's this???");
+				logger.info("NOTE a length 1 path!!! What's this???");
 				continue;
 			}
 			for(int i = 0;i<path.size() - 1;i++) {
@@ -376,14 +442,14 @@ public class InformationBase {
 				Long id2 = path.get(i+1);
 				Long currBw = getLinkCapacity(id1, id2);
 				if(currBw < bw) {
-					logger.debug("NOTE link cap negative!!!!!!!");
+					logger.info("NOTE link cap negative!!!!!!!");
 				}
 				/*
 				if(currBw < bw) {
 					markLinkFull(id1, id2);
 				}*/
 				putLinkCapacity(id1, id2, currBw - bw);
-				logger.debug("tid:" + tid + "fid:" + fgid + "..>><<update link cap:(" + id1 + "->"
+				logger.info("tid:" + tid + "fid:" + fgid + "..>><<update link cap:(" + id1 + "->"
 						+ id2 + ") to " + (currBw - bw) + " reduced " + bw);
 				if(currBw - bw == 0) {
 					Long lowerid = id1 > id2?id2 : id1;
@@ -478,7 +544,7 @@ public class InformationBase {
 			}
 			for(int i = currFGsNeedBW.size() - 1;i>=0;i--) {
 				if(!fgsCanBeSatisfied.contains(currFGsNeedBW.get(i))) {
-					logger.debug("THIS FG CAN NOT BW SATISFIED:" + currFGsNeedBW.get(i));
+					logger.info("THIS FG CAN NOT BW SATISFIED:" + currFGsNeedBW.get(i));
 					currFGsNeedBW.remove(i);
 				}
 			}
@@ -492,7 +558,7 @@ public class InformationBase {
 			for(PreferenceHelper helper : prflist) {
 				s += "(" + helper.lowerid + "->" + helper.higherid + ")";
 			}
-			logger.debug(s);
+			logger.info(s);
 			//now for each link, compute fair-share and allocate bw accordingly
 			for(int i = 0;i<prflist.size();i++) {
 
@@ -505,9 +571,9 @@ public class InformationBase {
 				HashMap<String, Long> allocMap = 
 						computeLinkBWallocation(lowerid, higherid, prflist.get(i).preference);
 				////////////////////////////
-				logger.debug("for (" + lowerid + "->" + higherid + ")");					
+				logger.info("for (" + lowerid + "->" + higherid + ")");					
 				for(String key : allocMap.keySet()) {
-					logger.debug("alloc:" + key + " bw:" + allocMap.get(key));
+					logger.info("alloc:" + key + " bw:" + allocMap.get(key));
 				}
 				//based on the bw allocation, we can compute at this point
 				//which links are full, and thus compute the tunnels that
@@ -528,22 +594,22 @@ public class InformationBase {
 				///////////////
 				for(String fullTunnel : fullTunnels) {
 					if(!currAvaTunnel.contains(fullTunnel)) {
-						logger.debug("NOTE: removing non-exist tunnel:" + fullTunnel);
+						logger.info("NOTE: removing non-exist tunnel:" + fullTunnel);
 						continue;
 					}
 					//remove the full tunnels from avaliable tunnels
 					currAvaTunnel.remove(fullTunnel);
-					logger.debug("remove full tunnel " + fullTunnel + " now have " + currAvaTunnel);
+					logger.info("remove full tunnel " + fullTunnel + " now have " + currAvaTunnel);
 					//ALSO MAKE ALL LINKS OF THIS TUNNEL FROM LINK UNAVALIABLE
 					LinkedList<String> failFGs = preference.get(fullTunnel);
 					if(failFGs == null || failFGs.size() == 0) {
-						logger.debug("NOTE no body prefer this tunnel but it's full???" + fullTunnel);
+						logger.info("NOTE no body prefer this tunnel but it's full???" + fullTunnel);
 					} else {
 						for(String failFgid : failFGs) {
 							for(PreferenceHelper phelper : prflist) {
 								if(phelper.preference.contains(failFgid)) {
 									phelper.preference.remove(failFgid);
-									logger.debug("Allocation will fail, remove " + failFgid + " from (" 
+									logger.info("Allocation will fail, remove " + failFgid + " from (" 
 									+ phelper.lowerid + "," + phelper.higherid + ")");
 								}
 							}
@@ -557,7 +623,7 @@ public class InformationBase {
 				//links on the same tunnel useless. In this case, no need to
 				//allocate bw, on these other tunnels
 				if(currAvaTunnel.size() == 0) {
-					logger.debug("NO MORE TUNNEL AVALIABLE, BREAK==>");
+					logger.info("NO MORE TUNNEL AVALIABLE, BREAK==>");
 					break;
 				}
 
@@ -571,26 +637,26 @@ public class InformationBase {
 					}
 				}
 			}
-			logger.debug("After one iteration---------------------------------->");
-			logger.debug("Full links:");
+			logger.info("After one iteration---------------------------------->");
+			logger.info("Full links:");
 			for(Long lowerid : fullLinks.keySet()) {
 				CopyOnWriteArrayList<Long> dstid = fullLinks.get(lowerid);
-				logger.debug("(" + lowerid + "," + dstid + ")");
+				logger.info("(" + lowerid + "," + dstid + ")");
 			}
-			logger.debug("FG allocations:");
+			logger.info("FG allocations:");
 			for(String fgid : FgToTunnelMap.keySet()) {
 				ConcurrentHashMap<String, Long> alloc = FgToTunnelMap.get(fgid);
 				String ss = "For fg " + fgid + ":";
 				for(String tid : alloc.keySet()) {
 					ss += tid + "->" + alloc.get(tid) + " ";
 				}
-				logger.debug(ss);
+				logger.info(ss);
 			}
 		}		
 		
-		logger.debug("FG bw allocation finished!!");
+		logger.info("FG bw allocation finished!!");
 		for(String fgid : allFGBW.keySet()) {
-			logger.debug(fgid + "->" + allFGBW.get(fgid));
+			logger.info(fgid + "->" + allFGBW.get(fgid));
 		}
 		
 	}
@@ -612,9 +678,9 @@ public class InformationBase {
 		
 		for(Integer conid : localControllerSwMap.keySet()) {
 			CopyOnWriteArrayList<Long> swids = localControllerSwMap.get(conid);
-			logger.debug("now comes to con:" + conid + " with sw:" + swids);
+			logger.info("now comes to con:" + conid + " with sw:" + swids);
 			for(Long currswid : swids) {
-				logger.debug("now comes to sw:" + currswid);
+				logger.info("now comes to sw:" + currswid);
 				if(!descmap.containsKey(currswid)) 
 					continue;
 				//add the desc to the controller-sw map!!
@@ -623,12 +689,12 @@ public class InformationBase {
 							controllerSwitchFGDesc.get(conid);
 					if(currConSwMap.containsKey(currswid)) {
 						currConSwMap.get(currswid).addAll(descmap.get(currswid));
-						logger.debug("now it is2 ::::" + currConSwMap.get(currswid));
+						logger.info("now it is2 ::::" + currConSwMap.get(currswid));
 					} else {
 						LinkedList<SwitchFlowGroupDesc> desclist = new LinkedList<SwitchFlowGroupDesc>();
 						desclist.addAll(descmap.get(currswid));
 						currConSwMap.put(currswid, desclist);
-						logger.debug("now it is ::::" + currConSwMap.get(currswid));
+						logger.info("now it is ::::" + currConSwMap.get(currswid));
 					}
 				} else {
 					LinkedList<SwitchFlowGroupDesc> desclist = new LinkedList<SwitchFlowGroupDesc>();
@@ -637,7 +703,7 @@ public class InformationBase {
 					currConSwMap.put(currswid, desclist);
 					controllerSwitchFGDesc.put(conid, currConSwMap);
 
-					logger.debug("now it is3 ::::" + currConSwMap.get(currswid));
+					logger.info("now it is3 ::::" + currConSwMap.get(currswid));
 				}
 			}
 		}
@@ -668,11 +734,11 @@ public class InformationBase {
 				}
 			}
 		}
-		logger.debug("the list:");
+		logger.info("the list:");
 		for(Long srcid : swfgmap.keySet()) {
 			LinkedList<SwitchFlowGroupDesc> descl = swfgmap.get(srcid);
 			for(SwitchFlowGroupDesc desc : descl)
-				logger.debug(desc.getSrc() + "->" + desc.getDst() + " " 
+				logger.info(desc.getSrc() + "->" + desc.getDst() + " " 
 			+ desc.getFgSrcSwid() + "--->" + desc.getFgDstSwid() + ":" + desc.getBw());
 		}
 		return swfgmap;
@@ -710,7 +776,7 @@ public class InformationBase {
 							LinkedList<String> previousFGs = linkPreference.get(lowerid).get(higherid);
 							for(String s : fgPreferThisTunnel) {
 								if(previousFGs.contains(s)) {
-									logger.debug("NOTE adding duplicate fg entry!" + s + " to " + previousFGs);
+									logger.info("NOTE adding duplicate fg entry!" + s + " to " + previousFGs);
 									continue;
 								}
 								previousFGs.add(s);
@@ -720,7 +786,7 @@ public class InformationBase {
 							LinkedList<String> newFGs = new LinkedList<String>();
 							for(String s : fgPreferThisTunnel) {
 								if(newFGs.contains(s)) {
-									logger.debug("NOTE adding duplicate fg entry!" + s + " to " + newFGs);
+									logger.info("NOTE adding duplicate fg entry!" + s + " to " + newFGs);
 									continue;
 								}
 								newFGs.add(s);
@@ -746,7 +812,7 @@ public class InformationBase {
 				String s = "for the link from " + lowerid + " to " + higherid + " the # of preference:"
 						+ (linkPreference.get(lowerid).get(higherid) == null?"0!":linkPreference.get(lowerid).get(higherid).size());
 				s += " while # of tunnel using this link:" + linkToTunnelMap.get(lowerid).get(higherid).size();
-				logger.debug(s);
+				logger.info(s);
 			}
 		}
 		return linkPreference;
@@ -806,7 +872,7 @@ public class InformationBase {
 			for(String fgid : preference.get(tid)) {
 				fgids += fgid + "...";
 			}
-			logger.debug(tid + " is preference for " + fgids);
+			logger.info(tid + " is preference for " + fgids);
 		}
 		return preference;
 	}
@@ -830,13 +896,13 @@ public class InformationBase {
 		}
 		avaliableBW = getLinkCapacity(id1, id2);
 
-		logger.debug("STARTING ALLOC ON:" + id1 + "," + id2 + " WITH AVABW" + avaliableBW);
+		logger.info("STARTING ALLOC ON:" + id1 + "," + id2 + " WITH AVABW" + avaliableBW);
 		boolean bwDepleted = true;
 		do {
 			bwDepleted = true;
 			long aveBw = avaliableBW/fgNeedBW;
 			avaliableBW = avaliableBW - (aveBw*fgNeedBW);//0 ideally			
-			//logger.debug("restart : avaBW:" + avaliableBW 
+			//logger.info("restart : avaBW:" + avaliableBW 
 			//		+ " fgNeedBW:" + fgNeedBW + " aveBW:" + aveBw);
 			//at this point, assume bw is all allocated to fgs, 
 			//then to see how many of them get more than needed
@@ -846,7 +912,7 @@ public class InformationBase {
 					continue;
 				Long fgdemand = currFgDemand.get(fgid);//getFGCurrDemand(fgid);
 				if(fgdemand <= aveBw) {
-					logger.debug("ON LINK (" + id1 
+					logger.info("ON LINK (" + id1 
 							+ "<>" + id2 + ") DEMAND MET " 
 							+ fgid + " with demand " + fgdemand
 							+ " current LinkCap" + getLinkCapacity(id1, id2));
@@ -861,7 +927,7 @@ public class InformationBase {
 					currFgDemand.remove(fgid);
 					bwDepleted = false;
 				} else {
-					logger.debug("DEMAND NOT MET (" + id1
+					logger.info("DEMAND NOT MET (" + id1
 							+ "<>" + id2 + ") fg:" 
 							+ fgid + " give it " + aveBw
 							+ " current LinkCap" + getLinkCapacity(id1, id2));
@@ -879,7 +945,7 @@ public class InformationBase {
 		
 		//should we remove this ????
 		if(fgNeedBW > 0) {
-			logger.debug("making this link full:(" + id1
+			logger.info("making this link full:(" + id1
 					+ "->" + id2 + ")");
 			markLinkFull(id1, id2);
 		}
@@ -913,7 +979,7 @@ public class InformationBase {
 			bwDepleted = true;
 			long aveBw = avaliableBW/fgNeedBW;
 			avaliableBW = avaliableBW - (aveBw*fgNeedBW);//0 ideally			
-			//logger.debug("restart : avaBW:" + avaliableBW 
+			//logger.info("restart : avaBW:" + avaliableBW 
 			//		+ " fgNeedBW:" + fgNeedBW + " aveBW:" + aveBw);
 			//at this point, assume bw is all allocated to fgs, 
 			//then to see how many of them get more than needed
@@ -923,7 +989,7 @@ public class InformationBase {
 					continue;
 				Long fgdemand = currFgDemand.get(fgid);//getFGCurrDemand(fgid);
 				if(fgdemand <= aveBw) {
-					logger.debug("DEMAND MET " + fgid + " with demand " + fgdemand);
+					logger.info("DEMAND MET " + fgid + " with demand " + fgdemand);
 					//demand is met
 					fgNeedBW --;
 					avaliableBW += (aveBw - fgdemand);
@@ -934,7 +1000,7 @@ public class InformationBase {
 					currFgDemand.remove(fgid);
 					bwDepleted = false;
 				} else {
-					logger.debug("DEMAND NOT MET " + fgid + " give it " + aveBw);
+					logger.info("DEMAND NOT MET " + fgid + " give it " + aveBw);
 					currFgDemand.put(fgid, (currFgDemand.get(fgid) - aveBw));
 					addFGBW(fgid, aveBw);
 					allTBW.put(tunnelid, allTBW.get(tunnelid) - aveBw);
@@ -960,7 +1026,7 @@ public class InformationBase {
 //				
 //			}
 		}
-		//logger.debug("tgfg compution finished:" + tg.id + ":" + tg.currentFGs.size());
+		//logger.info("tgfg compution finished:" + tg.id + ":" + tg.currentFGs.size());
 		if(tunnelFull == true)
 			fullTunnels.add(tunnelid);
 		return FGBWonTunnel;
@@ -988,17 +1054,17 @@ public class InformationBase {
 		String dstMac = HexString.toHexString(Ethernet.toLong(match.getDataLayerDestination()));
 		Long srcSwid = hostSwitchMap.get(srcMac).swid;
 		Long dstSwid = hostSwitchMap.get(dstMac).swid;
-		logger.debug("Looking for MATCH " 
+		logger.info("Looking for MATCH " 
 		+ " srcMac:" + srcMac + " dstMac:" + dstMac
 		+ " srcSw:" + srcSwid + " dstSw:" + dstSwid);
 		
 		for(String fgid : allFGs.keySet()){
 			FlowGroup fg = allFGs.get(fgid);
 			if(fg.srcSwid.equals(srcSwid) && fg.dstSwid.equals(dstSwid)) {
-				logger.debug("FOUND MATCH src:" + srcSwid + " dst:" + dstSwid);
+				logger.info("FOUND MATCH src:" + srcSwid + " dst:" + dstSwid);
 				if(addMatchToFG(match, fgid) == true) {
 					matchFGMap.put(match, fg.id);
-					logger.debug("set match  " + match + "to " + fgid);
+					logger.info("set match  " + match + "to " + fgid);
 					break;
 				}
 			}
@@ -1017,7 +1083,7 @@ public class InformationBase {
 				Map.Entry<String, JsonNode> field = fields.next();
 				String key = field.getKey();
 				JsonNode data = field.getValue();
-				//logger.debug(key + "]]]]]" + data);
+				//logger.info(key + "]]]]]" + data);
 				if(key.equals("fg")) {
 					Iterator<Map.Entry<String, JsonNode>> fgfields = data.fields();
 					while(fgfields.hasNext()) {
@@ -1052,7 +1118,7 @@ public class InformationBase {
 							tg.allTunnels.add(id);
 							TtoTGMap.put(id, tgkey);
 						}						
-						//logger.debug("]]]]]" + tgkey + "]]]]" + tgdata.get("src") + "-->" + tgdata.get("dst"));
+						//logger.info("]]]]]" + tgkey + "]]]]" + tgdata.get("src") + "-->" + tgdata.get("dst"));
 						
 						allTGs.put(tgkey, tg);
 						
@@ -1071,7 +1137,7 @@ public class InformationBase {
 						Map.Entry<String, JsonNode> tunnelJson = allts.next();
 						String tunnelid = tunnelJson.getKey();
 						JsonNode tunneldata = tunnelJson.getValue();
-						//logger.debug(tunnelid + "-->" + tunneldata);
+						//logger.info(tunnelid + "-->" + tunneldata);
 						LinkedList<String> list = 
 								mapper.readValue(tunneldata.traverse(), new TypeReference<LinkedList<String>>(){});
 						
@@ -1099,8 +1165,8 @@ public class InformationBase {
 									linkToTunnelMap.put(lowerid, map);									
 								}
 
-								logger.debug("adding a tunnel to a link:(" + lowerid + "->" + higherid + ") " + tunnelid);
-								logger.debug("now: (" + lowerid + "->" + higherid + ")" + linkToTunnelMap.get(lowerid).get(higherid).size());
+								logger.info("adding a tunnel to a link:(" + lowerid + "->" + higherid + ") " + tunnelid);
+								logger.info("now: (" + lowerid + "->" + higherid + ")" + linkToTunnelMap.get(lowerid).get(higherid).size());
 							}
 							tunnel.path.add(newnode);
 						}
@@ -1144,7 +1210,7 @@ public class InformationBase {
 				t.capacity = linkCap;
 			for(TunnelGroup tg : allTGs.values())
 				tg.capacity = linkCap;
-			logger.debug("Config reading finished---------># tunnel:" 
+			logger.info("Config reading finished---------># tunnel:" 
 			+ allTs.size()
 			+ " # of tgs:" + allTGs.size()
 			+ " # of fgs:" + allFGs.size());
@@ -1162,7 +1228,7 @@ public class InformationBase {
 	public void releaseTunnelCapacity(String tid, Long cap) {
 		synchronized(allTs) {
 			if(allTs.get(tid).capacity + cap > linkCap) {
-				logger.debug("NOTE tunnel cap exceed maximum!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " getting " + cap);
+				logger.info("NOTE tunnel cap exceed maximum!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " getting " + cap);
 				return;
 			}
 			allTs.get(tid).capacity += cap;
@@ -1172,7 +1238,7 @@ public class InformationBase {
 	public boolean consumeTunnelCapacity(String tid, Long cap) {
 		synchronized(allTs) {
 			if(allTs.get(tid).capacity - cap < 0) {
-				logger.debug("NOTE tunnel cap not sufficient!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " reducing " + cap);
+				logger.info("NOTE tunnel cap not sufficient!!! on tunnel:" + tid + ":" + allTs.get(tid).capacity + " reducing " + cap);
 				return false;
 			}
 			allTs.get(tid).capacity += cap;
@@ -1192,14 +1258,14 @@ public class InformationBase {
 		Long srcSwid = getSwitchByMac(srcMAC);
 		Long dstSwid = getSwitchByMac(dstMAC);
 
-		logger.debug("::::::::::::::::::::::::::>>>>>>>>>" + srcMAC + "on" + srcSwid + "->" + dstMAC + " on " + dstSwid);
+		logger.info("::::::::::::::::::::::::::>>>>>>>>>" + srcMAC + "on" + srcSwid + "->" + dstMAC + " on " + dstSwid);
 		LinkedList<TunnelInfo> tinfolist = new LinkedList<TunnelInfo>();
 		for(String fgid : allFGs.keySet()) {
 			FlowGroup fg = allFGs.get(fgid);
 			if(fg.dstSwid.equals(dstSwid) && fg.srcSwid.equals(srcSwid)) {
 				//found the fg!
 				if(!FgToTunnelMap.containsKey(fgid)) {
-					logger.debug("NOTE asking tunnel info based an unassigned FG!" + fgid);
+					logger.info("NOTE asking tunnel info based an unassigned FG!" + fgid);
 					return null;
 				}
 				ConcurrentHashMap<String, Long> tmap = FgToTunnelMap.get(fgid);

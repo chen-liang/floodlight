@@ -19,7 +19,7 @@ public interface RemoteGlobalServer extends Remote {
 	
 	public Short getPortOnSwByMac(Long swid, String mac, int id) throws RemoteException;
 	
-	public boolean addPortSwitchMap(String mac, Long swid, int id) throws RemoteException;
+	public boolean addPortSwitchMap(String mac, Short port, Long swid, int id) throws RemoteException;
 	
 	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id) throws RemoteException;
 	
@@ -34,5 +34,7 @@ public interface RemoteGlobalServer extends Remote {
 	public Long getTunnelCapacity(String tid) throws RemoteException;
 	
 	public LinkedList<TunnelInfo> getTunnelInfoBySrcDst(String srcMAC, String dstMAC) throws RemoteException;
+	
+	public boolean portMacNoted(String mac, Long swid, Short port) throws RemoteException; 
 	
 }
