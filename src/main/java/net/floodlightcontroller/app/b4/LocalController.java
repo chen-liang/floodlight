@@ -10,7 +10,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +22,8 @@ import org.openflow.protocol.OFPacketOut;
 import org.openflow.protocol.OFPort;
 import org.openflow.protocol.OFStatisticsRequest;
 import org.openflow.protocol.OFType;
-import org.openflow.protocol.OFPacketIn.OFPacketInReason;
+import org.openflow.protocol.Wildcards;
+import org.openflow.protocol.Wildcards.Flag;
 import org.openflow.protocol.action.OFAction;
 import org.openflow.protocol.action.OFActionOutput;
 import org.openflow.protocol.statistics.OFFlowStatisticsReply;
@@ -62,7 +62,6 @@ import java.util.concurrent.TimeoutException;
 import net.floodlightcontroller.learningswitch.LearningSwitch;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryListener;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
-import net.floodlightcontroller.packet.BSN;
 import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPacket;
@@ -269,7 +268,7 @@ IOFSwitchListener {
 
 			IOFSwitch sw = floodlightProvider.getSwitch(swid);
 			try {
-				logger.info("****************Writing this info " + po + " on " + swid + " p " + port.getName());
+				//logger.info("****************Writing this info " + po + " on " + swid + " p " + port.getName());
 				sw.write(po, null);
 				sw.flush();
 			} catch (IOException e) {
@@ -777,10 +776,14 @@ IOFSwitchListener {
 					matchesWeHaveSeen.put(middleswid, list);
 				}
 
-				match.setWildcards(((Integer)sw.getAttribute(IOFSwitch.PROP_FASTWILDCARDS)).intValue()
+				/*match.setWildcards(((Integer)sw.getAttribute(IOFSwitch.PROP_FASTWILDCARDS)).intValue()
 						& ~OFMatch.OFPFW_IN_PORT
 						& ~OFMatch.OFPFW_DL_VLAN & ~OFMatch.OFPFW_DL_SRC & ~OFMatch.OFPFW_DL_DST
-						& ~OFMatch.OFPFW_NW_SRC_MASK & ~OFMatch.OFPFW_NW_DST_MASK);
+						& ~OFMatch.OFPFW_NW_SRC_MASK & ~OFMatch.OFPFW_NW_DST_MASK);*/
+				
+				match.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT)
+						.matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+						.withNwDstMask(0).withNwSrcMask(0));
 				this.writeFlowMod(
 						sw, 
 						OFFlowMod.OFPFC_ADD, 
@@ -792,12 +795,16 @@ IOFSwitchListener {
 				+" installing flow!!" + match);
 				if(reversePath == true) {
 
-					reverseMatch.setWildcards(((Integer)sw.getAttribute(IOFSwitch.PROP_FASTWILDCARDS)).intValue()
+					/*reverseMatch.setWildcards(((Integer)sw.getAttribute(IOFSwitch.PROP_FASTWILDCARDS)).intValue()
 							& ~OFMatch.OFPFW_IN_PORT
 							& ~OFMatch.OFPFW_DL_VLAN & ~OFMatch.OFPFW_DL_SRC & ~OFMatch.OFPFW_DL_DST
-							& ~OFMatch.OFPFW_NW_SRC_MASK & ~OFMatch.OFPFW_NW_DST_MASK);
+							& ~OFMatch.OFPFW_NW_SRC_MASK & ~OFMatch.OFPFW_NW_DST_MASK);*/
+					reverseMatch.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT)
+							.matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+							.withNwDstMask(0).withNwSrcMask(0));
 					this.writeFlowMod(sw, 
-							OFFlowMod.OFPFC_ADD, -1, 
+							OFFlowMod.OFPFC_ADD, 
+							OFPacketOut.BUFFER_ID_NONE,
 							reverseMatch.setInputPort(portOnMiddleToAfter), 
 							portOnMiddleToBefore, 
 							LocalController.CONFIG_INTERVAL);
@@ -855,7 +862,11 @@ IOFSwitchListener {
 			return;
 		}
 		IOFSwitch sw = floodlightProvider.getSwitch(swid);
+		match.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+				.withNwDstMask(0).withNwSrcMask(0));
 		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(peerPort), port, LocalController.CONFIG_INTERVAL);
+		reverseMatch.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+				.withNwDstMask(0).withNwSrcMask(0));
 		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, reverseMatch.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
 		logger.info("on" + sw.getId() + " install to Host flow on outport:" + port + " inport:" +  peerPort + " for " + match);
 		logger.info("on" + sw.getId() + " also reverse path:outport:" + peerPort + " inport:" + port + " for " + reverseMatch);
