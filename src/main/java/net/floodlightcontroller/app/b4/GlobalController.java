@@ -118,9 +118,13 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		return informationBase.getSwitchByMac(mac);
 	}
 	
-	public boolean addPortSwitchMap(String mac, Short port, Long swid, int id) {
+	public boolean addPortSwitchMap(String mac, Short port, Long speedBps, Long swid, int id) {
 		informationBase.addControllerSwMap(swid, id);
-		return informationBase.addPortSwitchMap(mac, port, swid);
+		return informationBase.addPortSwitchMap(mac, port, speedBps, swid);
+	}
+	
+	public void removeSwichFromControoler(Long swid, int id) {
+		informationBase.removeSwichFromControoler(swid, id);
 	}
 	
 	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id)
@@ -253,6 +257,10 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 		return informationBase.portMacNoted(mac, swid, port);
 	}
 	
+	public LinkedList<Long> setMatchToTunnel(Long srcSwid, Long dstSwid,
+			String tid, Long bw, int id) {
+		return informationBase.setMatchToTunnel(srcSwid, dstSwid, tid, bw, id);
+	}
 	//the interesting part!!!!!!!!
 	public boolean consumeTunnelCapacity(String tid, Long cap) {
 		return informationBase.consumeTunnelCapacity(tid, cap);

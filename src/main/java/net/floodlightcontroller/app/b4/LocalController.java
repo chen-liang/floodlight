@@ -120,7 +120,7 @@ IOFSwitchListener {
     // normally, setup reverse flow as well. Disable only for using cbench for comparison with NOX etc.
     protected static final boolean LEARNING_SWITCH_REVERSE_FLOW = true;
 	/////////////////////////////////////////
-    protected static short CONFIG_INTERVAL = 3;
+    protected static short CONFIG_INTERVAL = 10;
     
     protected ConcurrentSkipListSet<String> macGlobalAlreadyKnow;//NOTE ELEMENT NEED TO BE REMOVED SOMETIME
     
@@ -168,8 +168,10 @@ IOFSwitchListener {
 					if(values.size() > 0) {
 						for(OFStatistics stat : values) {
 							if(stat instanceof OFFlowStatisticsReply) {
-							OFFlowStatisticsReply flowstat = (OFFlowStatisticsReply)stat;
-							flowStatByMatch.put(flowstat.getMatch(), flowstat.getByteCount());
+								OFFlowStatisticsReply flowstat = (OFFlowStatisticsReply)stat;
+								//flowStatByMatch.put(flowstat.getMatch(), flowstat.getByteCount());
+								OFMatch match = flowstat.getMatch().clone().setInputPort(Short.MAX_VALUE);
+								flowStatByMatch.put(match, flowstat.getByteCount());
 							} else {
 								logger.info("NOTE Unexceptioned Stat " + stat.getClass().getCanonicalName());
 							}
@@ -196,7 +198,7 @@ IOFSwitchListener {
 					sendPortMacToAll(swid);
 				}
 				try {
-					Thread.sleep(2000);
+					Thread.sleep(1000*CONFIG_INTERVAL);
 				} catch (InterruptedException e) {
 					e.printStackTrace();
 				}
@@ -226,7 +228,7 @@ IOFSwitchListener {
 	
 	private void sendPortMacToAll(Long swid) {
 		if(!swLocalCache.containsKey(swid)) {
-			logger.debug("NOTE send port to peer, but don't know this swid!" + swid);
+			logger.debug("NOTE send port to peer, but don't know this swid! already removed?" + swid);
 			return;
 		}
 		LinkedList<ImmutablePort> ports = swLocalCache.get(swid);
@@ -269,19 +271,21 @@ IOFSwitchListener {
 			IOFSwitch sw = floodlightProvider.getSwitch(swid);
 			try {
 				//logger.info("****************Writing this info " + po + " on " + swid + " p " + port.getName());
-				sw.write(po, null);
-				sw.flush();
+				if(sw == null) {
+					logger.info("NOTE sw is null when sending things to it!! removed?" + swid);
+				} else {
+					sw.write(po, null);
+					sw.flush();
+				}
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
 		}
 	}
 	
-	private void findTunnelAndInstall(ConcurrentHashMap<OFMatch, Long> matches) {
+	synchronized private void findTunnelAndInstall(ConcurrentHashMap<OFMatch, Long> matches) {
 		//NOTE this only works when we assume all src -> dst
 		//flows belong to the same tunnel
-		ConcurrentSkipListSet<String> tunnelCovered = 
-				new ConcurrentSkipListSet<String>();
 		for(OFMatch match : matches.keySet()) {
 			logger.info("now for this match:" + match);
 			TunnelInfo tinfo = getSwitchInstallByMatch(match);
@@ -291,11 +295,24 @@ IOFSwitchListener {
 			} else {
 				logger.info("............" + tinfo.getPath());
 			}
-			if(tunnelCovered.contains(tinfo.getTid())) {
-				logger.info("already installed for this tunnel:" + tinfo.getTid());
-				continue;
+			LinkedList<Long> path = null;
+			try {
+				Long bw = matches.get(match);
+				if(bw == null)
+					bw = new Long(0);
+				path = server.setMatchToTunnel(
+						tinfo.getPath().getFirst(), 
+						tinfo.getPath().getLast(), 
+						tinfo.getTid(),
+						bw,
+						handler.id);
+			} catch (RemoteException e) {
+				e.printStackTrace();
 			}
-			pushFlowToSwitches(tinfo.getPath(), match, true);
+			if(path == null)
+				pushFlowToSwitches(tinfo.getPath(), match, true);
+			else
+				pushFlowToSwitches(path, match, true);
 		}
 	}
 	
@@ -512,9 +529,12 @@ IOFSwitchListener {
 				logger.info("Never seen this match, try flood it first, then try create using default");
 				//c = this.processPacketInMessage(sw, (OFPacketIn)msg, cntx);
 				//writePacketOutForPacketIn(sw, pi, OFPort.OFPP_FLOOD.getValue());
-				ConcurrentHashMap<OFMatch, Long> match = new ConcurrentHashMap<OFMatch, Long>();
-				match.put(pmatch, new Long(0));
-				findTunnelAndInstall(match);
+				//ConcurrentHashMap<OFMatch, Long> match = new ConcurrentHashMap<OFMatch, Long>();
+				//match.put(pmatch, new Long(0));
+				OFMatch tpmatch = pmatch.clone().setInputPort(Short.MAX_VALUE);
+				if(!flowStatByMatch.containsKey(tpmatch))
+					flowStatByMatch.put(tpmatch, new Long(0));
+				findTunnelAndInstall(flowStatByMatch);
 			}
 		}
 		return c;
@@ -546,7 +566,13 @@ IOFSwitchListener {
 
 	@Override
 	public void switchRemoved(long switchId) {		
-		logger.info("++++++++++switch removed:" + switchId);		
+		logger.info("++++++++++switch removed:" + switchId);	
+		swLocalCache.remove(switchId);
+		try {
+			server.removeSwichFromControoler(switchId, handler.id);
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
 	}
 
 	
@@ -561,7 +587,7 @@ IOFSwitchListener {
 			s += port.getName() + " add:" + addr + " number:"+ port.getPortNumber() + " ";
 			try {
 				logger.info("adding port-switch map====>addr:" + addr + " name:" + port.getName() + " is on " + sw.getId());
-				server.addPortSwitchMap(addr, port.getPortNumber(), sw.getId(), handler.id);
+				server.addPortSwitchMap(addr, port.getPortNumber(), port.getCurrentPortSpeed().getSpeedBps(), sw.getId(), handler.id);
 			} catch (RemoteException e) {
 				e.printStackTrace();
 			}
@@ -750,6 +776,13 @@ IOFSwitchListener {
 			if(!swLocalCache.containsKey(middleswid))
 				continue;
 			IOFSwitch sw = floodlightProvider.getSwitch(middleswid);
+			///////////
+			//if this happens, what a race condition!
+			if(sw == null) {
+				logger.info("NOTE sw is null while trying to send is things!" + middleswid);
+				continue;
+			}
+			///////////
 			try {
 				Short portOnMiddleToBefore = server.getPortBySwid(middleswid, beforeswid);
 				Short portOnMiddleToAfter = server.getPortBySwid(middleswid, afterswid);
@@ -802,9 +835,15 @@ IOFSwitchListener {
 					reverseMatch.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT)
 							.matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
 							.withNwDstMask(0).withNwSrcMask(0));
-					this.writeFlowMod(sw, 
+					/*this.writeFlowMod(sw, 
 							OFFlowMod.OFPFC_ADD, 
 							OFPacketOut.BUFFER_ID_NONE,
+							reverseMatch.setInputPort(portOnMiddleToAfter), 
+							portOnMiddleToBefore, 
+							LocalController.CONFIG_INTERVAL);*/
+					this.writeFlowMod(sw, 
+							OFFlowMod.OFPFC_ADD, 
+							-1,
 							reverseMatch.setInputPort(portOnMiddleToAfter), 
 							portOnMiddleToBefore, 
 							LocalController.CONFIG_INTERVAL);
@@ -862,14 +901,20 @@ IOFSwitchListener {
 			return;
 		}
 		IOFSwitch sw = floodlightProvider.getSwitch(swid);
-		match.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
-				.withNwDstMask(0).withNwSrcMask(0));
-		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(peerPort), port, LocalController.CONFIG_INTERVAL);
-		reverseMatch.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
-				.withNwDstMask(0).withNwSrcMask(0));
-		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, reverseMatch.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
-		logger.info("on" + sw.getId() + " install to Host flow on outport:" + port + " inport:" +  peerPort + " for " + match);
-		logger.info("on" + sw.getId() + " also reverse path:outport:" + peerPort + " inport:" + port + " for " + reverseMatch);
+    	if(sw == null) {
+    		logger.info("NOTE sw is null when writing flowmod to it! removed?" + swid);
+    	} else {
+    		match.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+    				.withNwDstMask(0).withNwSrcMask(0));
+    		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, match.setInputPort(peerPort), port, LocalController.CONFIG_INTERVAL);
+    		reverseMatch.setWildcards(Wildcards.FULL.matchOn(Flag.IN_PORT).matchOn(Flag.DL_DST).matchOn(Flag.DL_SRC)
+    				.withNwDstMask(0).withNwSrcMask(0));
+    		//writeFlowMod(sw, OFFlowMod.OFPFC_ADD, OFPacketOut.BUFFER_ID_NONE, reverseMatch.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
+    		
+    		writeFlowMod(sw, OFFlowMod.OFPFC_ADD, -1, reverseMatch.setInputPort(port), peerPort, LocalController.CONFIG_INTERVAL);
+    		logger.info("on" + sw.getId() + " install to Host flow on outport:" + port + " inport:" +  peerPort + " for " + match);
+    		logger.info("on" + sw.getId() + " also reverse path:outport:" + peerPort + " inport:" + port + " for " + reverseMatch);
+    	}
 	}
 	/*
 	private void pushFlowModGivenSwFGDesc(OFMatch match, SwitchFlowGroupDesc desc) {
@@ -891,7 +936,7 @@ IOFSwitchListener {
 	}*/
 	///////////////////////////////////////////////////////
 	//////////////////////////////////////////////////////
-
+/*
 	private Command processPacketInMessage(IOFSwitch sw, OFPacketIn pi, FloodlightContext cntx) {
 		// Read in packet data headers by using OFMatch
 		OFMatch match = new OFMatch();
@@ -954,7 +999,7 @@ IOFSwitchListener {
 			logger.info("$$$$$$$$$$$$$$$$$$write out flowmod$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" + sw.getId() + ":" + outPort);
 		}
 		return Command.CONTINUE;
-	}
+	}*/
 
 	protected void addToPortMap(IOFSwitch sw, long mac, short vlan, short portVal) {
 		Map<MacVlanPair,Short> swMap = macVlanToSwitchPortMap.get(sw);
@@ -973,17 +1018,9 @@ IOFSwitchListener {
 		swMap.put(new MacVlanPair(mac, vlan), portVal);
 	}
 	
-	private void writePacketOutForPacketIn(IOFSwitch sw,
+/*	private void writePacketOutForPacketIn(IOFSwitch sw,
 			OFPacketIn packetInMessage,
 			short egressPort) {
-		// from openflow 1.0 spec - need to set these on a struct ofp_packet_out:
-		// uint32_t buffer_id; /* ID assigned by datapath (-1 if none). */
-		// uint16_t in_port; /* Packet's input port (OFPP_NONE if none). */
-		// uint16_t actions_len; /* Size of action array in bytes. */
-		// struct ofp_action_header actions[0]; /* Actions. */
-		/* uint8_t data[0]; */ /* Packet data. The length is inferred
-    from the length field in the header.
-    (Only meaningful if buffer_id == -1.) */
 
 		OFPacketOut packetOutMessage = (OFPacketOut) floodlightProvider.getOFMessageFactory().getMessage(OFType.PACKET_OUT);
 		short packetOutLength = (short)OFPacketOut.MINIMUM_LENGTH; // starting length
@@ -1016,9 +1053,9 @@ IOFSwitchListener {
 		} catch (IOException e) {
 			logger.error("Failed to write {} to switch {}: {}", new Object[]{ packetOutMessage, sw, e });
 		}
-	}
+	}*/
 	
-    private void pushPacket(IOFSwitch sw, OFMatch match, OFPacketIn pi, short outport) {
+    /*private void pushPacket(IOFSwitch sw, OFMatch match, OFPacketIn pi, short outport) {
         if (pi == null) {
             return;
         }
@@ -1080,7 +1117,7 @@ IOFSwitchListener {
         } catch (IOException e) {
             logger.error("Failure writing packet out", e);
         }
-    }
+    }*/
     
     private void writeFlowMod(IOFSwitch sw, short command, int bufferId,
             OFMatch match, short outPort, short idleTimeout) {
@@ -1138,13 +1175,15 @@ IOFSwitchListener {
 
         // and write it out
         try {
+        	//logger.info("writing this flowmod!!!!!!:::::" + flowMod);
             sw.write(flowMod, null);
+            sw.flush();
         } catch (IOException e) {
             logger.error("Failed to write {} to switch {}", new Object[]{ flowMod, sw }, e);
         }
     }
     
-    public Short getFromPortMap(IOFSwitch sw, long mac, short vlan) {
+    /*public Short getFromPortMap(IOFSwitch sw, long mac, short vlan) {
         if (vlan == (short) 0xffff) {
             vlan = 0;
         }
@@ -1154,5 +1193,5 @@ IOFSwitchListener {
 
         // if none found
         return null;
-    }
+    }*/
 }

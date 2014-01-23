@@ -48,9 +48,14 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	}
 
 	@Override
-	public boolean addPortSwitchMap(String mac, Short port, Long swid, int id)
+	public boolean addPortSwitchMap(String mac, Short port, Long speedBps, Long swid, int id)
 			throws RemoteException {
-		return controllerRef.addPortSwitchMap(mac, port, swid, id);
+		return controllerRef.addPortSwitchMap(mac, port, speedBps, swid, id);
+	}
+	
+	@Override
+	public void removeSwichFromControoler(Long swid, int id) {
+		controllerRef.removeSwichFromControoler(swid, id);
 	}
 
 	@Override
@@ -95,5 +100,11 @@ public class GlobalRMIImpl extends UnicastRemoteObject implements RemoteGlobalSe
 	public boolean portMacNoted(String mac, Long swid, Short port)
 			throws RemoteException {
 		return controllerRef.portMacNoted(mac, swid, port);
+	}
+
+	@Override
+	public LinkedList<Long> setMatchToTunnel(Long srcSwid, Long dstSwid,
+			String tid, Long bw, int id) {
+		return controllerRef.setMatchToTunnel(srcSwid, dstSwid, tid, bw, id);
 	}
 }

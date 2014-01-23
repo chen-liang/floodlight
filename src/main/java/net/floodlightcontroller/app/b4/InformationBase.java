@@ -69,6 +69,8 @@ public class InformationBase {
 	HashMap<Long, LinkedList<SwitchFlowGroupDesc>> currDescmap;
 	HashMap<Integer, HashMap<Long, LinkedList<SwitchFlowGroupDesc>>> currControllerSwitchFGDesc;
 	
+	ConcurrentHashMap<Long, ConcurrentHashMap<Long, TunnelSwitchListPair>> matchToTunnelMap;
+	
 	Long linkCap;
 	Long fgCap;
 	
@@ -80,21 +82,50 @@ public class InformationBase {
 	class PortSwitchPortPair {
 		Long swid;
 		Short port;
+		Long speedInBps;
+	}
+	
+	class TunnelSwitchListPair {
+		String tid;
+		LinkedList<Long> swids;
+		
+		public TunnelSwitchListPair() {
+			swids = new LinkedList<Long>();
+		}
 	}
 	
 	class SwitchInfo {
 		long dpid;
 		ConcurrentHashMap<Short, Long> peers; //key port id, value peer swid
 		ConcurrentHashMap<Long, Short> peersInverted; //key peer swid, value port 
+		ConcurrentHashMap<Short, Long> portBw; //key port id, value bw in Bps
 		
 		public SwitchInfo() {
 			peers = new ConcurrentHashMap<Short, Long>();
 			peersInverted = new ConcurrentHashMap<Long, Short>();
+			portBw = new ConcurrentHashMap<Short, Long>();
 		}
 		
 		public void addLink(Short localport, Long remoteId) {
 			peers.put(localport, remoteId);
 			peersInverted.put(remoteId, localport);
+		}
+		
+		public void addPortBw(Short id, Long bw) {
+			portBw.put(id, bw);
+		}
+		
+		public Long getBwByDst(Long dstSwid) {
+			if(!peersInverted.containsKey(dstSwid)) {
+				logger.info("NOTE on " + dpid + " asking for port to:" + dstSwid + " but no port to that!");
+				return null;
+			}
+			Short port = peersInverted.get(dstSwid);
+			if(!portBw.containsKey(port)) {
+				logger.info("NOTE on " + dpid + " said that there is port to " + dstSwid + " but no Bw info!!");
+				return Long.MAX_VALUE;
+			}
+			return portBw.get(port);
 		}
 	}	
 	
@@ -178,6 +209,7 @@ public class InformationBase {
 		matchFGMap = new ConcurrentHashMap<OFMatch, String>();
 		fgMatches = new ConcurrentHashMap<String, LinkedList<OFMatch>>();
 		linkCapacities = new ConcurrentHashMap<Long, ConcurrentHashMap<Long, Long>>();
+		matchToTunnelMap = new ConcurrentHashMap<Long, ConcurrentHashMap<Long, TunnelSwitchListPair>>();
 	}
 	
 	private Long getLinkCapacity(Long id1, Long id2) {
@@ -284,7 +316,7 @@ public class InformationBase {
 		return false;
 	}
 	
-	public boolean addPortSwitchMap(String mac, Short port, Long swid) {
+	public boolean addPortSwitchMap(String mac, Short port, Long speedInBps, Long swid) {
 		if(portSwitchMap.containsKey(mac)) {
 			logger.info("NOTE adding duplicate port mac address:" + mac + " port:" + port);
 			return false;
@@ -292,7 +324,13 @@ public class InformationBase {
 		PortSwitchPortPair pair = new PortSwitchPortPair();
 		pair.swid = swid;
 		pair.port = port;
+		pair.speedInBps = speedInBps;
 		portSwitchMap.put(mac, pair);
+		if(!allSwitchInfo.containsKey(swid)) {
+			SwitchInfo info = new SwitchInfo();
+			allSwitchInfo.put(swid, info);
+		}
+		allSwitchInfo.get(swid).addPortBw(port, speedInBps);
 		//tricky thing here is that we might already see this mac
 		//but back then, we did not know it is switch and added it
 		//as a host, if that so, need to fix that, otherwise, do nothing
@@ -326,13 +364,15 @@ public class InformationBase {
 				swids.add(swid);
 		} else {
 			CopyOnWriteArrayList<Long> swids = new CopyOnWriteArrayList<Long>();
-			if(!swids.contains(swid))
-				swids.add(swid);
+			swids.add(swid);
 			localControllerSwMap.put(id, swids);
 		}
 		return true;
 	}
 	
+	public void removeSwichFromControoler(Long swid, int id) {
+		localControllerSwMap.get(id).remove(swid);
+	}
 	
 	public Short getPortBySwid(Long srcSwid, Long dstSwid) {
 		if(!allSwitchInfo.containsKey(srcSwid)) {
@@ -952,87 +992,6 @@ public class InformationBase {
 		return FGBWonLink;
 	}
 
-	/*private HashMap<String, Long> computeTunnelBWallocation(String tunnelid, LinkedList<String> fglist) {
-
-		long avaliableBW;
-		boolean tunnelFull = false;
-		HashMap<String, Long> FGBWonTunnel = new HashMap<String, Long>();
-		
-		if(!allTBW.containsKey(tunnelid)) {
-			avaliableBW = allTs.get(tunnelid).capacity;
-			allTBW.put(tunnelid, avaliableBW);
-		} else {
-			avaliableBW = allTBW.get(tunnelid);
-		}
-
-		int fgNeedBW = fglist.size();
-		ConcurrentHashMap<String, Long> currFgDemand = 
-				new ConcurrentHashMap<String, Long>();
-
-		for(String fgid : fglist) {
-			currFgDemand.put(fgid, getFGCurrDemand(fgid));
-		}
-
-		boolean bwDepleted = true;
-		do {
-
-			bwDepleted = true;
-			long aveBw = avaliableBW/fgNeedBW;
-			avaliableBW = avaliableBW - (aveBw*fgNeedBW);//0 ideally			
-			//logger.info("restart : avaBW:" + avaliableBW 
-			//		+ " fgNeedBW:" + fgNeedBW + " aveBW:" + aveBw);
-			//at this point, assume bw is all allocated to fgs, 
-			//then to see how many of them get more than needed
-			// and take this part back as available 
-			for(String fgid : fglist) {
-				if(!currFgDemand.containsKey(fgid))
-					continue;
-				Long fgdemand = currFgDemand.get(fgid);//getFGCurrDemand(fgid);
-				if(fgdemand <= aveBw) {
-					logger.info("DEMAND MET " + fgid + " with demand " + fgdemand);
-					//demand is met
-					fgNeedBW --;
-					avaliableBW += (aveBw - fgdemand);
-					addFGBW(fgid, fgdemand);//allFGBW.put(fgid, fgdemand);
-					allTBW.put(tunnelid, allTBW.get(tunnelid) - fgdemand);
-					FGBWonTunnel.put(fgid, fgdemand);
-					
-					currFgDemand.remove(fgid);
-					bwDepleted = false;
-				} else {
-					logger.info("DEMAND NOT MET " + fgid + " give it " + aveBw);
-					currFgDemand.put(fgid, (currFgDemand.get(fgid) - aveBw));
-					addFGBW(fgid, aveBw);
-					allTBW.put(tunnelid, allTBW.get(tunnelid) - aveBw);
-					if(FGBWonTunnel.containsKey(fgid)) {
-						FGBWonTunnel.put(fgid, FGBWonTunnel.get(fgid) + aveBw);
-					} else 
-						FGBWonTunnel.put(fgid, aveBw);
-				}
-			}
-			//at this point bwDepleted remains true means aveBw is still
-			//the remainder of the devision
-		} while(bwDepleted == false && fgNeedBW > 0);
-
-		if(fgNeedBW > 0) {
-			//some fg still can not be satisfied
-			//NOTE::::: FG NOT SATISFIED BECAUSE TUNNEL DO NOT HAVE MUCH BW!
-			//MAKE THIS TUNNEL AS UNAVALIABLE!!!
-			tunnelFull = true;
-//			for(String fgid : currFgDemand.keySet()) {
-//				long grantedBw = getFGCurrDemand(fgid) - currFgDemand.get(fgid);
-//				addFGBW(fgid, grantedBw);
-//				allTBW.put(tunnelid, allTBW.get(tunnelid) - grantedBw);
-//				
-//			}
-		}
-		//logger.info("tgfg compution finished:" + tg.id + ":" + tg.currentFGs.size());
-		if(tunnelFull == true)
-			fullTunnels.add(tunnelid);
-		return FGBWonTunnel;
-	}*/
-
-
 	private boolean addMatchToFG(OFMatch match, String fgid) {
 		if(fgMatches.containsKey(fgid)) {
 			LinkedList<OFMatch> list = fgMatches.get(fgid);
@@ -1206,6 +1165,11 @@ public class InformationBase {
 				}
 			}
 
+			for(String tid : allTs.keySet()) {
+				setTunnelCapacity(tid);
+				logger.info("Set tunnel capa to:" + allTs.get(tid).capacity);;
+			}
+			
 			for(Tunnel t : allTs.values())
 				t.capacity = linkCap;
 			for(TunnelGroup tg : allTGs.values())
@@ -1223,6 +1187,29 @@ public class InformationBase {
 			e.printStackTrace();
 			return false;
 		}
+	}
+	
+	private void setTunnelCapacity(String tid) {
+		//set capacity of all tunnels, the smallest link capacity is
+		//the capacity of this tunnel
+		Tunnel tunnel = allTs.get(tid);
+		LinkedList<Long> path = tunnel.path;
+		Long currCapacity = Long.MAX_VALUE;
+		for(int i = 0;i<path.size() - 1;i++) {
+			Long swid1 = path.get(i);
+			Long swid2 = path.get(i + 1);
+			Long bw;
+			if(!allSwitchInfo.containsKey(swid1))
+				bw = null;
+			else 
+				bw = allSwitchInfo.get(swid1).getBwByDst(swid2);
+			if(bw == null || bw.equals(0))
+				continue;
+			if(bw < currCapacity) {
+				currCapacity = bw;
+			}
+		}
+		tunnel.capacity = currCapacity;		
 	}
 	
 	public void releaseTunnelCapacity(String tid, Long cap) {
@@ -1276,6 +1263,42 @@ public class InformationBase {
 			}
 		}
 		return tinfolist;
+	}
+	
+	public LinkedList<Long> setMatchToTunnel(Long srcSwid, Long dstSwid, String tid, Long bw, int id) {
+		synchronized(matchToTunnelMap) {
+			if(matchToTunnelMap.containsKey(srcSwid) && matchToTunnelMap.get(srcSwid).containsKey(dstSwid)) {
+				TunnelSwitchListPair pair = matchToTunnelMap.get(srcSwid).get(dstSwid);
+				for(Long swid : localControllerSwMap.get(id))
+					if(!pair.swids.contains(swid))
+						pair.swids.add(swid);
+				if(pair.swids.containsAll(allSwitchInfo.keySet())) {
+					matchToTunnelMap.get(srcSwid).remove(dstSwid);
+					if(matchToTunnelMap.get(srcSwid).size() == 0) {
+						matchToTunnelMap.remove(srcSwid);
+					}
+				}
+				logger.info("already exist a path, just use it:conid:" 
+				+ id + " src:" + srcSwid + " dst:" + dstSwid + " path:" + allTs.get(pair.tid).path);
+				return allTs.get(pair.tid).path;
+			}
+			TunnelSwitchListPair pair = new TunnelSwitchListPair();
+			pair.swids.addAll(localControllerSwMap.get(id));
+			pair.tid = tid;
+			
+			allTs.get(tid).capacity = allTs.get(tid).capacity > bw?allTs.get(tid).capacity - bw:0;
+			
+			if(matchToTunnelMap.containsKey(srcSwid)) {
+				//but not dst
+				matchToTunnelMap.get(srcSwid).put(dstSwid, pair);
+			} else {
+				ConcurrentHashMap<Long, TunnelSwitchListPair> map = new ConcurrentHashMap<Long, TunnelSwitchListPair>();
+				map.put(dstSwid, pair);
+				matchToTunnelMap.put(srcSwid, map);
+			}
+			logger.info("notified by local: this tunnel:" + tid + " is picked");
+			return null;
+		}
 	}
 	
 	//the interesting part!!!!!!!!
