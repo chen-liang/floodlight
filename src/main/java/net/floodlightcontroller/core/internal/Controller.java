@@ -21,6 +21,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
+import java.lang.management.ThreadMXBean;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -80,6 +81,7 @@ import net.floodlightcontroller.debugevent.IEventUpdater;
 import net.floodlightcontroller.debugevent.NullDebugEvent;
 import net.floodlightcontroller.debugevent.IDebugEventService.EventType;
 import net.floodlightcontroller.debugevent.IDebugEventService.MaxEventsRegistered;
+import net.floodlightcontroller.measurement.IMeasurementServices;
 import net.floodlightcontroller.notification.INotificationManager;
 import net.floodlightcontroller.notification.NotificationManagerFactory;
 import net.floodlightcontroller.packet.Ethernet;
@@ -164,6 +166,9 @@ public class Controller implements IFloodlightProviderService,
     private ScheduledExecutorService ses;
     private ISyncService syncService;
     private IStoreClient<Long, SwitchSyncRepresentation> storeClient;
+    //////////////////////////////
+    private IMeasurementServices measurement;
+    //////////////////////////////
 
     // Configuration options
     protected String openFlowHost = null;
@@ -1649,6 +1654,12 @@ public class Controller implements IFloodlightProviderService,
     void setThreadPoolService(IThreadPoolService tp) {
         this.threadPool = tp;
     }
+    
+    //////////////////////////////////////
+    void setMeasurementService(IMeasurementServices services) {
+    	this.measurement = services;
+    }
+    //////////////////////////////////////
 
     IThreadPoolService getThreadPoolService() {
         return this.threadPool;
@@ -1826,7 +1837,24 @@ public class Controller implements IFloodlightProviderService,
                     Command cmd;
                     for (IOFMessageListener listener : listeners) {
                         pktinProcTime.recordStartTimeComp(listener);
+                        //////////////////////////////////////////
+                        Long swid = sw.getId();
+                        String listenerName = listener.getName();
+                        ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+                        if(bean.isCurrentThreadCpuTimeSupported()) {
+                        	//measurement.recordStartSystemTime(swid, m.getType(), listenerName, System.nanoTime());
+                        	//measurement.recordStartCPUTime(swid, m.getType(), listenerName, bean.getCurrentThreadCpuTime());
+                        	measurement.recordStart(swid, m.getType(), listenerName, bean.getCurrentThreadCpuTime(), System.nanoTime());
+                        }
+                        ///////////////////////////////////////////
                         cmd = listener.receive(sw, m, bc);
+                        ////////////////////////////////////////
+                        if(bean.isCurrentThreadCpuTimeSupported()) {
+                        	//measurement.recordEndCPUTime(swid, m.getType(), listenerName, System.nanoTime());
+                        	//measurement.recordEndSystemTime(swid, m.getType(), listenerName, bean.getCurrentThreadCpuTime());
+                        	measurement.recordEnd(swid, m.getType(), listenerName, bean.getCurrentThreadCpuTime(), System.nanoTime());
+                        }
+                        /////////////////////////////////////////
                         pktinProcTime.recordEndTimeComp(listener);
 
                         if (Command.STOP.equals(cmd)) {

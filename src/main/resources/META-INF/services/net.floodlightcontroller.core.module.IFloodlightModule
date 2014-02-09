@@ -28,3 +28,4 @@ org.sdnplatform.sync.internal.SyncTorture
 net.floodlightcontroller.devicemanager.internal.DefaultEntityClassifier
 net.floodlightcontroller.app.b4.LocalController
 net.floodlightcontroller.app.b4.GlobalController
+net.floodlightcontroller.measurement.Measurement

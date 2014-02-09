@@ -162,6 +162,7 @@ IOFSwitchListener {
 			while(true) {
 				//one job is to send out states request periodically
 				//logger.info("**********************querying for stats!!!" + swLocalCache.size());
+				flowStatByMatch.clear();
 				for(Long swid : swLocalCache.keySet()) {
 					IOFSwitch sw = floodlightProvider.getSwitch(swid);
 					LinkedList<OFStatistics> values = new LinkedList<OFStatistics>(getStats(sw));
@@ -550,7 +551,7 @@ IOFSwitchListener {
 		for(LDUpdate update : updateList) {
 			logger.info("++++++++++----linkdiscoverupdate:" + update.getSrc() 
 					+ "::" + update.getSrcPort() + ":" 
-					+ update.getDst() + "::" + update.getDstPort());
+					+ update.getDst() + "::" + update.getDstPort() + "-->" + update);
 			try {
 				server.addSwLink(update.getSrc(), update.getSrcPort(), update.getDst(), update.getDstPort());
 			} catch (RemoteException e) {

@@ -107,8 +107,19 @@ public class InformationBase {
 		}
 		
 		public void addLink(Short localport, Long remoteId) {
+			//logger.info(dpid + " adding to " + " remoteid:" + remoteId + " on " + localport);
 			peers.put(localport, remoteId);
-			peersInverted.put(remoteId, localport);
+			int count = 0;				
+			for(short port : peers.keySet()) {
+				if(peers.get(port).equals(remoteId)) {
+					count ++;
+				}
+			}
+			if(count != 1) {
+				logger.info("NOTE PANIC! this switch has more than 1 port connect to same peer switch?! " + peers);
+			} else {
+				peersInverted.put(remoteId, localport);
+			}
 		}
 		
 		public void addPortBw(Short id, Long bw) {
@@ -273,7 +284,7 @@ public class InformationBase {
 			SwitchInfo peerinfo = allSwitchInfo.get(pair.swid);
 			peerinfo.addLink(pair.port, swid);
 			s += " it is a switch!!!! ";
-			logger.info("");
+			logger.info(s);
 			return true;
 		} else {
 			//not a switch at this point, but maybe later on will figure out that it a switch
@@ -338,6 +349,8 @@ public class InformationBase {
 			logger.info(mac + " is not a host! remove from host map");
 			hostSwitchMap.remove(mac);
 		}
+		//update tunnel capacity if needed
+		
 		return true;
 	}
 	

@@ -31,6 +31,8 @@ import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.counter.ICounterStoreService;
 import net.floodlightcontroller.debugcounter.IDebugCounterService;
 import net.floodlightcontroller.debugevent.IDebugEventService;
+import net.floodlightcontroller.measurement.IMeasurementServices;
+import net.floodlightcontroller.measurement.Measurement;
 import net.floodlightcontroller.perfmon.IPktInProcessingTimeService;
 import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.storage.IStorageSourceService;
@@ -93,6 +95,10 @@ public class FloodlightProvider implements IFloodlightModule {
            context.getServiceImpl(IThreadPoolService.class));
        controller.setSyncService(
            context.getServiceImpl(ISyncService.class));
+       ////////////////////////
+       controller.setMeasurementService(
+    		   context.getServiceImpl(IMeasurementServices.class));
+       ////////////////////////
        controller.init(context.getConfigParams(this));
     }
 

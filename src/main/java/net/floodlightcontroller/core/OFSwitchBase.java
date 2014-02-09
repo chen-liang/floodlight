@@ -18,6 +18,8 @@
 package net.floodlightcontroller.core;
 
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -48,6 +50,7 @@ import net.floodlightcontroller.debugcounter.IDebugCounterService.CounterExcepti
 import net.floodlightcontroller.debugcounter.IDebugCounterService.CounterType;
 import net.floodlightcontroller.debugcounter.NullDebugCounter;
 import net.floodlightcontroller.devicemanager.SwitchPort;
+import net.floodlightcontroller.measurement.Measurement;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.routing.ForwardingBase;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
@@ -152,6 +155,10 @@ public abstract class OFSwitchBase implements IOFSwitch {
     private IDebugCounter ctrSwitchPktinDrops, ctrSwitchWriteDrops;
 
     private static final String PACKAGE = OFSwitchBase.class.getPackage().getName();
+    
+    ////////////////////////////////////////
+    Measurement measurement;
+    ////////////////////////////////////////
 
 
     protected final static ThreadLocal<Map<IOFSwitch,List<OFMessage>>> local_msg_buffer =
@@ -981,12 +988,23 @@ public abstract class OFSwitchBase implements IOFSwitch {
 
     @Override
     public void deliverStatisticsReply(OFStatisticsReply reply) {
+    	//////////////////////////////////////
+    	ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+    	if(bean.isCurrentThreadCpuTimeSupported()) {
+    		measurement.recordStart(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+    	}
+    	////////////////////////////////////
         checkForTableStats(reply);
         OFStatisticsFuture future = this.statsFutureMap.get(reply.getXid());
         if (future != null) {
             future.deliverFuture(this, reply);
             // The future will ultimately unregister itself and call
             // cancelStatisticsReply
+            ////////////////////////////////
+        	if(bean.isCurrentThreadCpuTimeSupported()) {
+        		measurement.recordEnd(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+        	}
+            ////////////////////////////////
             return;
         }
         /* Transaction id was not found in statsFutureMap.check the other map */
@@ -994,6 +1012,11 @@ public abstract class OFSwitchBase implements IOFSwitch {
         if (caller != null) {
             caller.receive(this, reply, null);
         }
+        ////////////////////////////////
+    	if(bean.isCurrentThreadCpuTimeSupported()) {
+    		measurement.recordEnd(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+    	}
+        ////////////////////////////////
     }
 
     @LogMessageDocs({
