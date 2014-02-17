@@ -22,4 +22,9 @@ public class MeasurementWorkerImpl extends UnicastRemoteObject implements Measur
 			throws RemoteException {
 		return measurementRef.getAllFractionAndRefresh();
 	}
+
+	@Override
+	public FloodlightMeasurementInfo getInfoAndRefresh() throws RemoteException {
+		return measurementRef.getInfoAndRefresh();
+	}
 }

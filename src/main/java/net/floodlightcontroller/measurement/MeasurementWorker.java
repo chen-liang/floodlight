@@ -6,4 +6,6 @@ import java.util.HashMap;
 
 public interface MeasurementWorker extends Remote {
 	public HashMap<Long, Double> getAllFractionAndRefresh() throws RemoteException;
+	
+	public FloodlightMeasurementInfo getInfoAndRefresh() throws RemoteException;
 }

@@ -667,6 +667,9 @@ class OFChannelHandler
                 h.sw.setConnected(true);
                 h.sw.setChannel(h.channel);
                 h.sw.setFloodlightProvider(h.controller);
+                ////////////////////////////////////////////
+                h.sw.setMeasurement(h.controller.getMeasurement());
+                /////////////////////////////////////////////
                 h.sw.setThreadPoolService(h.controller.getThreadPoolService());
                 try {
                     h.sw.setDebugCounterService(h.controller.getDebugCounter());

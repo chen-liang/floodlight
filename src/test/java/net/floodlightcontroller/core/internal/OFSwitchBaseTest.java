@@ -39,6 +39,7 @@ import net.floodlightcontroller.core.ImmutablePort;
 import net.floodlightcontroller.core.OFSwitchBase;
 import net.floodlightcontroller.debugcounter.DebugCounter;
 import net.floodlightcontroller.debugcounter.IDebugCounterService;
+import net.floodlightcontroller.measurement.IMeasurementServices;
 import net.floodlightcontroller.packet.ARP;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPacket;
@@ -111,6 +112,12 @@ public class OFSwitchBaseTest {
         public String toString() {
             return "OFSwitchTest";
         }
+
+		@Override
+		public void setMeasurement(IMeasurementServices sevice) {
+			// TODO Auto-generated method stub
+			
+		}
     }
     private OFSwitchTest sw;
     private ImmutablePort p1a;

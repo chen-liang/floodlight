@@ -226,7 +226,7 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 	public void setConfigFile(String filepath) {
 		//every time config is reset, we recompute the whole thing, this is where all things start!
 		configFilePath = filepath;
-		logger.debug("===============>>>>>>>>>>>>>>>>>>>>>>>>configfile set to:" + configFilePath);
+		logger.debug("configfile set to:" + configFilePath);
 		informationBase.readConfigFromFile(filepath);
 		process();
 		//sendToLocal();

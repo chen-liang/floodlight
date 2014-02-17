@@ -23,7 +23,7 @@ public class LocalRMIImpl extends UnicastRemoteObject implements RemoteLocalClie
 
 	@Override
 	public String test() throws RemoteException {
-		return "i'm " + controllerRef.getHandler().name;
+		return "local controller alive:" + controllerRef.getHandler().name;
 	}
 
 	@Override

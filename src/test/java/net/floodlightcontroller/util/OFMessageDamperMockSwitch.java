@@ -17,14 +17,15 @@
 package net.floodlightcontroller.util;
 
 import static org.junit.Assert.*;
+
 import java.io.IOException;
 import java.net.SocketAddress;
-
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
+
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -32,6 +33,7 @@ import net.floodlightcontroller.core.IFloodlightProviderService.Role;
 import net.floodlightcontroller.core.ImmutablePort;
 import net.floodlightcontroller.core.internal.Controller;
 import net.floodlightcontroller.debugcounter.IDebugCounterService;
+import net.floodlightcontroller.measurement.IMeasurementServices;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 
 import org.jboss.netty.channel.Channel;
@@ -490,4 +492,10 @@ public class OFMessageDamperMockSwitch implements IOFSwitch {
     public void processDriverHandshakeMessage(OFMessage m) {
         fail("Unexpected method call");
     }
+
+	@Override
+	public void setMeasurement(IMeasurementServices sevice) {
+		// TODO Auto-generated method stub
+		
+	}
 }

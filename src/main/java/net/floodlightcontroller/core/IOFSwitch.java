@@ -24,10 +24,12 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
+
 import net.floodlightcontroller.core.IFloodlightProviderService.Role;
 import net.floodlightcontroller.core.internal.Controller;
 import net.floodlightcontroller.debugcounter.IDebugCounterService;
 import net.floodlightcontroller.debugcounter.IDebugCounterService.CounterException;
+import net.floodlightcontroller.measurement.IMeasurementServices;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.util.OrderedCollection;
 
@@ -666,4 +668,8 @@ public interface IOFSwitch {
      * not been called yet.
      */
     public void processDriverHandshakeMessage(OFMessage m);
+    
+    ///////////////////////////////////////////////////
+    public void setMeasurement(IMeasurementServices sevice);
+    ///////////////////////////////////////////////////
 }

@@ -1659,6 +1659,10 @@ public class Controller implements IFloodlightProviderService,
     void setMeasurementService(IMeasurementServices services) {
     	this.measurement = services;
     }
+    
+    public IMeasurementServices getMeasurement() {
+    	return this.measurement;
+    }
     //////////////////////////////////////
 
     IThreadPoolService getThreadPoolService() {

@@ -50,6 +50,7 @@ import net.floodlightcontroller.debugcounter.IDebugCounterService.CounterExcepti
 import net.floodlightcontroller.debugcounter.IDebugCounterService.CounterType;
 import net.floodlightcontroller.debugcounter.NullDebugCounter;
 import net.floodlightcontroller.devicemanager.SwitchPort;
+import net.floodlightcontroller.measurement.IMeasurementServices;
 import net.floodlightcontroller.measurement.Measurement;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.routing.ForwardingBase;
@@ -157,7 +158,7 @@ public abstract class OFSwitchBase implements IOFSwitch {
     private static final String PACKAGE = OFSwitchBase.class.getPackage().getName();
     
     ////////////////////////////////////////
-    Measurement measurement;
+    IMeasurementServices measurement;
     ////////////////////////////////////////
 
 
@@ -991,7 +992,11 @@ public abstract class OFSwitchBase implements IOFSwitch {
     	//////////////////////////////////////
     	ThreadMXBean bean = ManagementFactory.getThreadMXBean();
     	if(bean.isCurrentThreadCpuTimeSupported()) {
-    		measurement.recordStart(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+    		if(measurement == null) {
+    			log.info("measurement null!!!!!!!!!");
+    		} else {
+    			measurement.recordStart(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+    		}
     	}
     	////////////////////////////////////
         checkForTableStats(reply);
@@ -1002,7 +1007,8 @@ public abstract class OFSwitchBase implements IOFSwitch {
             // cancelStatisticsReply
             ////////////////////////////////
         	if(bean.isCurrentThreadCpuTimeSupported()) {
-        		measurement.recordEnd(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
+        		if(measurement != null)
+        			measurement.recordEnd(this.getId(), reply.getType(), "switchStats", bean.getCurrentThreadCpuTime(), System.nanoTime());
         	}
             ////////////////////////////////
             return;
@@ -1599,4 +1605,11 @@ public abstract class OFSwitchBase implements IOFSwitch {
         else
             throw new SwitchDriverSubHandshakeNotStarted();
     }
+    
+    //////////////////////////////////////////////////////
+    @Override
+    public void setMeasurement(IMeasurementServices service) {
+    	this.measurement = service;
+    }
+    /////////////////////////////////////////////////////
 }
