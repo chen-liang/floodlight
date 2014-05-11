@@ -129,7 +129,11 @@ public class GlobalController  implements IOFMessageListener, IFloodlightModule,
 	
 	public void sendFlowDemand(HashMap<String, HashMap<String, FlowStatsDesc>> map, int id)
 			throws RemoteException {
-		// TODO Auto-generated method stub
+		/*TODO
+		 * we need to update fg dmd accordingly!!!!!!!!!!
+		 * fg.demand = ???
+		 * then, call informationBase.process()
+		 */
 		logger.info(">>>>>>>>>>>>>>>>>>>>Received FlowDemand!!!" + map.size() + " from " + id);
 		for(String srcMAC : map.keySet()) {
 			HashMap<String, FlowStatsDesc> destMap = map.get(srcMAC);

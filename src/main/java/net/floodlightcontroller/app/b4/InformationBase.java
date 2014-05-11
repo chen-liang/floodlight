@@ -384,6 +384,7 @@ public class InformationBase {
 	}
 	
 	public void removeSwichFromControoler(Long swid, int id) {
+		logger.info("removing sw:" + swid + " from con:" + id);
 		localControllerSwMap.get(id).remove(swid);
 	}
 	
@@ -1270,12 +1271,39 @@ public class InformationBase {
 				}
 				ConcurrentHashMap<String, Long> tmap = FgToTunnelMap.get(fgid);
 				for(String tid : tmap.keySet()) {
-					TunnelInfo tinfo = new TunnelInfo(tid, allTs.get(tid).path, allTs.get(tid).capacity);
-					tinfolist.add(tinfo);
+					Tunnel curTunnel = allTs.get(tid);
+					boolean usable = IsTunnelUsable(curTunnel.path);
+					if(usable == true) {
+						TunnelInfo tinfo = new TunnelInfo(tid, allTs.get(tid).path, allTs.get(tid).capacity);
+						tinfolist.add(tinfo);
+					}
 				}
 			}
 		}
 		return tinfolist;
+	}
+	
+	//TODO:
+	//this function needs to check demand and capacity!!!!!!!!!!!!!
+	private boolean IsTunnelUsable(LinkedList<Long> swids) {
+		for(Long swid : swids) {
+			boolean exist = false;
+			for(Integer conid : localControllerSwMap.keySet()) {
+				CopyOnWriteArrayList<Long> allswids = localControllerSwMap.get(conid);
+				if(allswids.contains(swid)) {
+					exist = true;
+					break;
+				}
+			}
+			if(exist == false) {
+				//did not find this switch under any conid
+				logger.info("failed to find the swid:" + swid);
+				return false;
+			} else {
+				logger.info("found swid:" + swid);
+			}
+		}
+		return true;
 	}
 	
 	public LinkedList<Long> setMatchToTunnel(Long srcSwid, Long dstSwid, String tid, Long bw, int id) {
@@ -1291,9 +1319,13 @@ public class InformationBase {
 						matchToTunnelMap.remove(srcSwid);
 					}
 				}
-				logger.info("already exist a path, just use it:conid:" 
-				+ id + " src:" + srcSwid + " dst:" + dstSwid + " path:" + allTs.get(pair.tid).path);
-				return allTs.get(pair.tid).path;
+				if(IsTunnelUsable(allTs.get(pair.tid).path)) {
+					logger.info("already exist a path, just use it:conid:" 
+							+ id + " src:" + srcSwid + " dst:" + dstSwid + " path:" + allTs.get(pair.tid).path);
+					return allTs.get(pair.tid).path;
+				} else {
+					logger.info("this existing path no longer usable!!!!!");
+				}
 			}
 			TunnelSwitchListPair pair = new TunnelSwitchListPair();
 			pair.swids.addAll(localControllerSwMap.get(id));

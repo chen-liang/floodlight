@@ -16,10 +16,16 @@ public class FloodlightMeasurementInfo implements Serializable {
 	
 	long totalNonHandlerTime;
 	
+	long totalCPUTimeElapsed;
+	
+	long totalSysTimeElapsed;
+	
 	public FloodlightMeasurementInfo() {
 		handlerFraction = new HashMap<Long, Double>();
 		allSwitches = new ArrayList<Long>();
 		totalNonHandlerTime = 0;
+		totalCPUTimeElapsed = 0;
+		totalSysTimeElapsed = 0;
 	}
 	
 	public void setHandlerFraction(HashMap<Long, Double> handlerFraction) {
@@ -44,5 +50,21 @@ public class FloodlightMeasurementInfo implements Serializable {
 	
 	public long getNonHandlerTime() {
 		return this.totalNonHandlerTime;
+	}
+	
+	public void setTotalCpuTimeElapsed(long time) {
+		this.totalCPUTimeElapsed = time;
+	}
+	
+	public long getTotalCpuTimeElapsed() {
+		return this.totalCPUTimeElapsed;
+	}
+	
+	public void setTotalSysTimeElapsed(long time) {
+		this.totalSysTimeElapsed = time;
+	}
+	
+	public long getTotalSysTimeElapsed() {
+		return this.totalSysTimeElapsed;
 	}
 }

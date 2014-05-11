@@ -132,7 +132,7 @@ IOFSwitchListener {
     	HashMap<String, HashMap<String,FlowStatsDesc>> map = new HashMap<String, HashMap<String,FlowStatsDesc>>();
     	for(OFStatistics value : values) {
     		if(!(value instanceof OFFlowStatisticsReply)) {
-    			logger.info("+++++++++++++++=====NOTE:unexcepted states Type!!!" + value.getClass().getCanonicalName());
+    			logger.info("NOTE:unexcepted states Type!!!" + value.getClass().getCanonicalName());
     			continue;
     		}
     		OFFlowStatisticsReply fstats = (OFFlowStatisticsReply)value;
@@ -150,7 +150,7 @@ IOFSwitchListener {
     		FlowStatsDesc desc = new FlowStatsDesc(fstats.getByteCount(), match);
     		
     		destMap.put(destMac, desc);
-    		logger.info("--------^^^^^^^^^^^adding flow count:" + sourceMac + "->" + destMac + ":" + fstats.getByteCount());
+    		logger.info("adding flow count:" + sourceMac + "->" + destMac + ":" + fstats.getByteCount());
     		map.put(sourceMac, destMap);
     	}    	
     	return map;
@@ -161,7 +161,6 @@ IOFSwitchListener {
 		public void run() {
 			while(true) {
 				//one job is to send out states request periodically
-				//logger.info("**********************querying for stats!!!" + swLocalCache.size());
 				flowStatByMatch.clear();
 				for(Long swid : swLocalCache.keySet()) {
 					IOFSwitch sw = floodlightProvider.getSwitch(swid);
@@ -178,6 +177,9 @@ IOFSwitchListener {
 							}
 						}
 						try {
+							//this step seems to be pointless, global controller 
+							//does need to know this...local controller explicitly
+							//sends this info to it when querying decisions
 							server.sendFlowDemand(computeFlowDemand(values), handler.id);
 						} catch (RemoteException e) {
 							e.printStackTrace();
@@ -194,7 +196,7 @@ IOFSwitchListener {
 						
 
 					} else {
-						//logger.info("***************************" + swid);
+
 					}
 					sendPortMacToAll(swid);
 				}
@@ -271,7 +273,6 @@ IOFSwitchListener {
 
 			IOFSwitch sw = floodlightProvider.getSwitch(swid);
 			try {
-				//logger.info("****************Writing this info " + po + " on " + swid + " p " + port.getName());
 				if(sw == null) {
 					logger.info("NOTE sw is null when sending things to it!! removed?" + swid);
 				} else {
@@ -294,13 +295,15 @@ IOFSwitchListener {
 				logger.info("no tunnel info! for this:" + match);
 				continue;
 			} else {
-				logger.info("............" + tinfo.getPath());
+				logger.info("tunnel to use:" + tinfo.getPath());
 			}
 			LinkedList<Long> path = null;
 			try {
 				Long bw = matches.get(match);
 				if(bw == null)
 					bw = new Long(0);
+				//tell server that this is the tunnel we are using
+				//bind it, update capacity accordingly as well.
 				path = server.setMatchToTunnel(
 						tinfo.getPath().getFirst(), 
 						tinfo.getPath().getLast(), 
@@ -407,7 +410,7 @@ IOFSwitchListener {
                 context.getServiceImpl(ICounterStoreService.class);
 		configParams = context.getConfigParams(this);
 		String global = configParams.get("global");
-		logger.info("---------------remote:" + global);
+		logger.info(">>>>>>>>>>>remote:" + global);
 		if(global != null && global.equals("enabled")) {
 			remote = true;
 		} else {
@@ -423,18 +426,18 @@ IOFSwitchListener {
 	protected void getServerConfig() {
 		if(configParams.get("globalrmiport") == null) {
 			rmi_serverport = RemoteGlobalConstant.RMI_PORT;
-			logger.info("@@@@@@@@@@@@NOTE:global rmi port not speficied, use default " + rmi_serverport);
+			logger.info("NOTE:global rmi port not speficied, use default " + rmi_serverport);
 		} else {
 			rmi_serverport = Integer.parseInt(configParams.get("globalrmiport"));
-			logger.info("@@@@@@@@@@@@NOTE:global rmi port specified to " + rmi_serverport);
+			logger.info("NOTE:global rmi port specified to " + rmi_serverport);
 		}
 
 		if(configParams.get("globalrmiserver") == null) {			
 			rmi_serverhost = RemoteGlobalConstant.RMI_HOST;
-			logger.info("@@@@@@@@@@@@NOTE:global rmi host not speficied, use default " + rmi_serverhost);
+			logger.info("NOTE:global rmi host not speficied, use default " + rmi_serverhost);
 		} else {
 			rmi_serverhost = configParams.get("globalrmiserver");
-			logger.info("@@@@@@@@@@@@NOTE:global rmi host specified to " + rmi_serverhost);
+			logger.info("NOTE:global rmi host specified to " + rmi_serverhost);
 		}
 	}
 
@@ -491,7 +494,7 @@ IOFSwitchListener {
 				
 				if(msg.getType() == OFType.PACKET_IN) {
 					OFPacketIn pi = (OFPacketIn)msg;
-					s += "{{{{{--->" + pi.getInPort();
+					s += " in port:" + pi.getInPort();
 					server.addHostSwitchMap(macadd, sw.getId(), pi.getInPort());
 				} else {
 					logger.info("NOTE Unexcepted mag type " + msg.getType() + " from " + sw.getId());
@@ -510,8 +513,8 @@ IOFSwitchListener {
 			logger.info("on" + sw.getId() + " seeing a match:" + pmatch);
 			Long dstLong = Ethernet.toLong(pmatch.getDataLayerDestination());
 			if(dstLong.equals(Ethernet.toLong(FAKE_DST))) {
-				String s = "***********************************************SEE THIS!!!! vlanid" 
-			+ eth.getVlanID() + " and the src!!!!:" + HexString.toHexString(sourceMACHash);
+				String s = "receving fake dst: vlanid:" 
+			+ eth.getVlanID() + " and src:" + HexString.toHexString(sourceMACHash);
 				logger.info(s);
 				//src of this packet is actually a port! tell global!!!
 				try {
@@ -527,7 +530,7 @@ IOFSwitchListener {
 				}
 			} else if(!matchesWeHaveSeen.containsKey(sw.getId()) || 
 					!matchesWeHaveSeen.get(sw.getId()).contains(pmatch)) {
-				logger.info("Never seen this match, try flood it first, then try create using default");
+				logger.info("seeing match for the first time");
 				//c = this.processPacketInMessage(sw, (OFPacketIn)msg, cntx);
 				//writePacketOutForPacketIn(sw, pi, OFPort.OFPP_FLOOD.getValue());
 				//ConcurrentHashMap<OFMatch, Long> match = new ConcurrentHashMap<OFMatch, Long>();
@@ -535,7 +538,9 @@ IOFSwitchListener {
 				OFMatch tpmatch = pmatch.clone().setInputPort(Short.MAX_VALUE);
 				if(!flowStatByMatch.containsKey(tpmatch))
 					flowStatByMatch.put(tpmatch, new Long(0));
-				findTunnelAndInstall(flowStatByMatch);
+				ConcurrentHashMap<OFMatch, Long> tmap = new ConcurrentHashMap<OFMatch, Long>();
+				tmap.put(tpmatch, new Long(0));
+				findTunnelAndInstall(tmap);
 			}
 		}
 		return c;
@@ -543,13 +548,13 @@ IOFSwitchListener {
 
 	@Override
 	public void linkDiscoveryUpdate(LDUpdate update) {
-		logger.info("++++++++++linkdiscoverupdate:" + update.getSrc() + ":" + update.getDst());
+		logger.info(">>>>>>>>>>>linkdiscoverupdate:" + update.getSrc() + ":" + update.getDst());
 	}
 
 	@Override
 	public void linkDiscoveryUpdate(List<LDUpdate> updateList) {
 		for(LDUpdate update : updateList) {
-			logger.info("++++++++++----linkdiscoverupdate:" + update.getSrc() 
+			logger.info(">>>>>>>>>>>>linkdiscoverupdatelist:" + update.getSrc() 
 					+ "::" + update.getSrcPort() + ":" 
 					+ update.getDst() + "::" + update.getDstPort() + "-->" + update);
 			try {
@@ -562,12 +567,12 @@ IOFSwitchListener {
 
 	@Override
 	public void switchAdded(long switchId) {		
-		logger.info("++++++++++switch added:" + switchId);
+		logger.info(">>>>>>>>>>>>>switch added:" + switchId);
 	}
 
 	@Override
 	public void switchRemoved(long switchId) {		
-		logger.info("++++++++++switch removed:" + switchId);	
+		logger.info(">>>>>>>>>>>>>>>switch removed:" + switchId);	
 		swLocalCache.remove(switchId);
 		try {
 			server.removeSwichFromControoler(switchId, handler.id);
@@ -579,7 +584,7 @@ IOFSwitchListener {
 	
 	@Override
 	public void switchActivated(long switchId) {
-		logger.info("++++++++++switch actived:" + switchId);		
+		logger.info(">>>>>>>>>>switch actived:" + switchId);		
 		IOFSwitch sw = floodlightProvider.getSwitch(switchId);
 		String s = "";
 		for(ImmutablePort port : sw.getPorts()) {
@@ -596,18 +601,18 @@ IOFSwitchListener {
 
 		LinkedList<ImmutablePort> ports = new LinkedList<ImmutablePort>(sw.getPorts());
 		swLocalCache.put(switchId, ports);
-		logger.info("............adds:" + s);	
+		logger.info(">>>>>>>>>>>>>switch added:" + s);	
 	}
 
 	@Override
 	public void switchPortChanged(long switchId, ImmutablePort port,
 			PortChangeType type) {
-		logger.info("++++++++++switch port changed:" + switchId);		
+		logger.info(">>>>>>>>>>switch port changed:" + switchId);		
 	}
 
 	@Override
 	public void switchChanged(long switchId) {
-		logger.info("++++++++++switch changed:" + switchId);
+		logger.info(">>>>>>>>>>>>switch changed:" + switchId);
 	}
 
 	public boolean sendSwFGDesc(

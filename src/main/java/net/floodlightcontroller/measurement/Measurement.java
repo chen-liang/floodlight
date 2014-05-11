@@ -1,5 +1,9 @@
 package net.floodlightcontroller.measurement;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.rmi.AlreadyBoundException;
@@ -38,6 +42,11 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 	final String RMI_ID = "floodlightmeasurement";
 	
 	protected static Logger logger;
+	
+	private static String counterlogPath = "/home/chen/fleventCount/";
+	private BufferedWriter counterlogWriter = null;
+	private int eventCount = 0;
+	private static int intervalMsec = 50;
 	
 	////////////////TIMES///////////////
 //	/protected long totalCpuTimeLastTime;
@@ -400,43 +409,84 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 		Times times = getTimesInfo(swid, type, listenerName);
 		times.cpuStart = cpustart;
 		times.sysStart = sysstart;
-		ThreadMXBean tbean = ManagementFactory.getThreadMXBean();
-		String s = "";
-		for(long id : tbean.getAllThreadIds()) {
-			s += tbean.getThreadInfo(id).getThreadName() +  "," + tbean.getThreadCpuTime(id) + "\n";
-		}
-		logger.info("num of thread:"+ tbean.getAllThreadIds().length  + " they are:" + s + "\n record start lname:" + listenerName + " sw:" + swid + " cpu:" + cpustart);
+//		ThreadMXBean tbean = ManagementFactory.getThreadMXBean();
+//		String s = "\n";
+//		for(long id : tbean.getAllThreadIds()) {
+//			s += tbean.getThreadInfo(id).getThreadName() +  "##" + tbean.getThreadCpuTime(id) + "\n";
+//		}
+//		logger.info("num of thread:"+ tbean.getAllThreadIds().length  + " they are:" + s + "\n record start lname:" + listenerName + " sw:" + swid + " cpu:" + cpustart);
 		/*if(times.isAvaliable()) {
 			times.cumulateTimes();
 		}*/
 	}
 
+	class EventCounter implements Runnable {
+
+		@Override
+		public void run() {
+			while(true) {
+				try {					
+					counterlogWriter.write(System.currentTimeMillis() + ":" + eventCount + "\n");
+					counterlogWriter.flush();
+					eventCount = 0;
+					Thread.sleep(intervalMsec);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}			
+		}
+		
+	}
+	
 	@Override
 	synchronized public void recordEnd(Long swid, OFType type, String listenerName,
 			long cpuend, long sysend) {
+
+		/////////////////////////////////
+		if(counterlogWriter == null) {
+			try {
+				File f = new File(counterlogPath + floodlightProvider.getAllSwitchDpids().toString());
+				if(!f.exists()) {
+					f.createNewFile();
+				}
+				FileWriter fstream = new FileWriter(f.getAbsoluteFile());
+				counterlogWriter = new BufferedWriter(fstream);
+				eventCount = 0;
+				Thread worker = new Thread(new EventCounter());
+				worker.start();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+		eventCount ++;
+		//////////////////////////////
+		
 		if(nameToFilter.contains(listenerName))
 			return;
 		Times times = getTimesInfo(swid, type, listenerName);
 		times.cpuEnd = cpuend;
 		times.sysEnd = sysend;
 
-		ThreadMXBean tbean = ManagementFactory.getThreadMXBean();
-		String s = "";
-		for(long id : tbean.getAllThreadIds()) {
-			s += tbean.getThreadInfo(id).getThreadName()  + "," + tbean.getThreadCpuTime(id) + "\n";
-		}
-		logger.info("num of thread:" + tbean.getAllThreadIds().length  + " they are:" + s + "\n record end lname:" + listenerName + " sw:" + swid + " cpu:" + cpuend + " minus:" + times.getElapsedCPUTime());
+//		ThreadMXBean tbean = ManagementFactory.getThreadMXBean();
+//		String s = "\n";
+//		for(long id : tbean.getAllThreadIds()) {
+//			s += tbean.getThreadInfo(id).getThreadName()  + "##" + tbean.getThreadCpuTime(id) + "\n";
+//		}
+//		logger.info("num of thread:" + tbean.getAllThreadIds().length  + " they are:" + s + "\n record end lname:" + listenerName + " sw:" + swid + " cpu:" + cpuend + " minus:" + times.getElapsedCPUTime());
 		if(times.isAvaliable()) {
 			times.cumulateTimes();
 		}
 	}
 	
 	private ConcurrentHashMap<String, Long> getAllCurrentThreadCpuTime() {
+		logger.info(">>>>>>>>>>>>>>>>>>>>>>>>>>calling get all thread cpu time!");
 		ThreadMXBean tbean = ManagementFactory.getThreadMXBean();
 		ConcurrentHashMap<String, Long> threadcpumap = new ConcurrentHashMap<String, Long>();
 		long[] allids = tbean.getAllThreadIds();
 		for(long id : allids) {
-			long time = tbean.getCurrentThreadCpuTime();
+			long time = tbean.getThreadCpuTime(id);
 			String name = tbean.getThreadInfo(id).getThreadName();
 			threadcpumap.put(name, time);
 		}
@@ -444,8 +494,8 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 	}
 	
 	public FloodlightMeasurementInfo getInfoAndRefresh() {
-		if(threadCpuTime.size() == 0 || totalAllSwitchOnHandlerCpuTime.size() == 0 ||
-				totalSystemTimeLastTime == 0) {
+		if(threadCpuTime.size() == 0 || totalSystemTimeLastTime == 0) {
+			logger.info(">>>>>>>>>>>first time initialize as:" + threadCpuTime.size() + ":" + totalSystemTimeLastTime);
 			//no info at this point, meaning no fraction can be computed,
 			//record some state, return
 			threadCpuTime = getAllCurrentThreadCpuTime();
@@ -459,18 +509,10 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 			return null;
 		}
 		
-		FloodlightMeasurementInfo info = new FloodlightMeasurementInfo();
+		FloodlightMeasurementInfo info = getInfo();
 		
-		HashMap<Long, Double> handlerFraction = getAllFraction();
-
-		info.setNonHandlerTime(currentNonHandlerCpuTime);
-		info.setHandlerFraction(handlerFraction);
-		
-		ArrayList<Long> allSwitch = new ArrayList<Long>(floodlightProvider.getAllSwitchDpids());
-		info.setAllSwitch(allSwitch);
-		
-		logger.info("INFO^^^^^^^^^^^^^^^^^^^^^^^^^non time:" + currentNonHandlerCpuTime + " frack:" + handlerFraction.keySet()
-				+ " frac:" + handlerFraction.values() +" switches:" + allSwitch);
+		logger.info("INFO^^^^^^^^^^^^^^^^^^^^^^^^^non time:" + currentNonHandlerCpuTime + " frack:" + info.getHandlerFraction().keySet()
+				+ " frac:" + info.getHandlerFraction().values() +" switches:" + info.getAllSwitch());
 		
 		//reset some states
 		totalAllSwitchOnHandlerCpuTime = getAllSwitchHandlerCPUTime();
@@ -482,34 +524,39 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 		return info;
 	}
 	
-	private HashMap<Long, Double> getAllFraction() {
+	private FloodlightMeasurementInfo getInfo() {
+		
+		FloodlightMeasurementInfo info = new FloodlightMeasurementInfo();
 		
 		HashMap<Long, Double> allFractions = new HashMap<Long, Double>();
 
 		HashMap<Long, Long> currentAllSwitchOnHandlerCpuTime = getAllSwitchHandlerCPUTime();
 		
 		ConcurrentHashMap<String, Long> map = getAllCurrentThreadCpuTime();
-		/*String ss = "";
-		for(String name : map.keySet()) {
-			ss += name + ":" + map.get(name) +"\n";
-		}
-		logger.info("GET FRACTION: num of thread:" + map.size() + "->\n" + ss);*/
+		String ss = "";
 		long totalCpuTimeElapsed = 0;//getCurrentAllThreadTime();
+		long totalSysElapsedTime;
 		for(String key : map.keySet()) {
 			if(threadCpuTime.containsKey(key)) {
 				//if this a thread we saw also last time
+				ss += key + "##" + map.get(key) + " - " + threadCpuTime.get(key) + "\n";
 				totalCpuTimeElapsed += map.get(key) - threadCpuTime.get(key);
 			} else {
+				ss += key + "##" + map.get(key) + "\n";
 				totalCpuTimeElapsed += map.get(key);
 			}
 		}
 		for(String key : threadCpuTime.keySet()) {
 			if(!map.containsKey(key)) {
 				//this is a thread that disappeared in the last interval
-				long offset = (System.nanoTime() - totalSystemTimeLastTime)/2;
+				//we use the average cpu time of other thread as its value
+				long offset = totalCpuTimeElapsed/map.size();
 				totalCpuTimeElapsed += (threadCpuTime.get(key) + offset);
+				ss += key + "-##" + offset + "\n";
 			}
 		}
+		ss += "total:" + totalCpuTimeElapsed + "\n";
+		//logger.info("computing fraction, current cpu time all:" + map.size() + "->\n" + ss);
 		threadCpuTime = map;
 		
 		//long totalCpuTimeElapsed =  currentTotalTime;// - totalCpuTimeLastTime;
@@ -544,7 +591,7 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 			long cpuTimeOnNonHandlerEach = totalCpuTimeOnNonHandler/allDpids.size();
 			
 			//compute total system since last call
-			long totalSysElapsedTime = System.nanoTime() - totalSystemTimeLastTime;
+			totalSysElapsedTime = System.nanoTime() - totalSystemTimeLastTime;
 			//now combine the two fractions and use the sum as total fraction
 			for(Long swid : currentAllSwitchOnHandlerCpuTime.keySet()) {
 				long elapsedOnHandler = currentAllSwitchOnHandlerCpuTime.get(swid);
@@ -556,12 +603,14 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 				double fractionNonHandler = (double)cpuTimeOnNonHandlerEach/(double)totalSysElapsedTime;
 				//allFractions.put(swid, fractionOnHandler);
 				allFractions.put(swid, fractionOnHandler);
-				String s = "==========> sw " + swid + 
-						" is " + fraction + 
+				/*String s = "==========> sw " + swid + 
+						" total: " + fraction + 
 						" h-only is " + fractionOnHandler + 
 						"(" + elapsedOnHandler + "/" + totalSysElapsedTime + ")" +
 						" non-h-only is " + fractionNonHandler +
-						"(" + cpuTimeOnNonHandlerEach + "/" + totalSysElapsedTime;
+						"(" + cpuTimeOnNonHandlerEach + "/" + totalSysElapsedTime;*/
+				String s = "handler util of sw " + swid +
+						" is:" + fraction;
 				logger.info(s);
 			}
 			//for those that do not have handler cpu time recorded, and average non-handler cpu time to it
@@ -570,24 +619,32 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 					double fraction = (double)cpuTimeOnNonHandlerEach/(double)totalSysElapsedTime;
 					//allFractions.put(swid, fraction);
 					allFractions.put(swid, new Double(0));
-					logger.info("==========> non-h-only sw " + swid + " is " + fraction);
+					logger.info("no handler util recorded in this interval for sw " + swid);
 				}
 			}
 			double controllerFraction = (double)totalCpuTimeElapsed/(double)totalSysElapsedTime;
-			logger.info("=======================> for this controller, total cpu:" + 
-			totalCpuTimeElapsed + " and sys " + totalSysElapsedTime + " fraction " + controllerFraction);
+			logger.info("for this controller, total cpu:" + totalCpuTimeElapsed + 
+					" total non-handler time " + currentNonHandlerCpuTime + 
+					" and total system time " + totalSysElapsedTime + " fraction " + controllerFraction);
 		} else {
 			//in this case, there is no event handler part at all!(maybe because no packet_in thing coming
 			//in this period)
 			//in this case, we think of all cpu time as non handler time
 			currentNonHandlerCpuTime = totalCpuTimeElapsed;
-			long totalSysElapsedTime = System.nanoTime() - totalSystemTimeLastTime;
+			totalSysElapsedTime = System.nanoTime() - totalSystemTimeLastTime;
 			double controllerFraction = (double)totalCpuTimeElapsed/(double)totalSysElapsedTime;
-			logger.info("=======================> for this controller, total cpu:" + 
-			totalCpuTimeElapsed + " and sys " + totalSysElapsedTime + " fraction " + controllerFraction);
+			logger.info("for this controller, total cpu:" + totalCpuTimeElapsed + 
+					" total non-handler time " + currentNonHandlerCpuTime + 
+					" and total system time " + totalSysElapsedTime + " fraction " + controllerFraction);
 		}
 		
-		return allFractions;
+		info.setHandlerFraction(allFractions);
+		info.setNonHandlerTime(currentNonHandlerCpuTime);
+		info.setTotalCpuTimeElapsed(totalCpuTimeElapsed);
+		info.setTotalSysTimeElapsed(totalSysElapsedTime);
+		ArrayList<Long> allSwitch = new ArrayList<Long>(floodlightProvider.getAllSwitchDpids());
+		info.setAllSwitch(allSwitch);
+		return info;
 	}
 	
 	public HashMap<Long, Double> getAllFractionAndRefresh() {
@@ -616,7 +673,7 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 			return null;
 		}
 		
-		HashMap<Long, Double> allFractions = getAllFraction();
+		FloodlightMeasurementInfo info = getInfo();
 		
 		//reset some states
 		totalAllSwitchOnHandlerCpuTime = getAllSwitchHandlerCPUTime();
@@ -624,7 +681,7 @@ public class Measurement implements IFloodlightModule, IMeasurementServices {
 		currentNonHandlerCpuTime = 0;
 		clearCumulativeTimes();
 		timesMap.clear();
-		return allFractions;
+		return info.getHandlerFraction();
 	}
 	
 }
